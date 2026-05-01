@@ -6,6 +6,14 @@ const request = axios.create({
   timeout: 30000
 })
 
+request.interceptors.request.use(config => {
+  const token = localStorage.getItem('codexray_token')
+  if (token) {
+    config.headers.Authorization = 'Bearer ' + token
+  }
+  return config
+})
+
 request.interceptors.response.use(
   (response) => {
     const { data } = response

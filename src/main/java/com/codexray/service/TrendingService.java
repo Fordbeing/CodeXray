@@ -157,7 +157,8 @@ public class TrendingService {
         if (!results.isEmpty()) {
             return results;
         }
-        return scrapeAndSave();
+        scrapeAndSave();
+        return getTrending(today, lang);
     }
 
     // ========== 内部方法 ==========

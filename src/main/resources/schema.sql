@@ -54,3 +54,14 @@ CREATE TABLE IF NOT EXISTS code_chunk (
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_task (task_id)
 );
+
+CREATE TABLE IF NOT EXISTS sys_user (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username      VARCHAR(64)   NOT NULL UNIQUE,
+    password_hash VARCHAR(256)  NOT NULL,
+    nickname      VARCHAR(128),
+    github_username VARCHAR(128),
+    avatar_url    VARCHAR(512),
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);

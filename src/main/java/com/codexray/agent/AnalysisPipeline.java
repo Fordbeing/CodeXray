@@ -11,10 +11,14 @@ import java.io.*;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.zip.GZIPOutputStream;
 
 /**
  * 分析流水线：编排 Scanner → Indexer → Analyzer → Reporter 四个 Agent。
+ * 使用虚拟线程并行执行 Stage 1 (Scanning) 和 Stage 2 (Indexing)。
  */
 @Service
 public class AnalysisPipeline {
@@ -41,31 +45,43 @@ public class AnalysisPipeline {
 
     /**
      * 执行完整分析流水线。
+     * Stage 1 (Scanning) 和 Stage 2 (Indexing) 通过虚拟线程并行执行。
      */
     public void execute(String taskId, Long dbId, String repoPath, String repoUrl) {
-        try {
-            // 阶段 1: 扫描 & 索引
+        try (ExecutorService vtExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
+
+            // Stage 1 + 2 并行执行（虚拟线程）
             updateStatus(dbId, "SCANNING");
-            ScannerAgent.ScanResult scanResult = scannerAgent.scan(taskId, repoPath);
+            Future<ScannerAgent.ScanResult> scanFuture = vtExecutor.submit(
+                    () -> scannerAgent.scan(taskId, repoPath));
+
+            Future<IndexerAgent.ProjectProfile> indexFuture = vtExecutor.submit(
+                    () -> indexerAgent.index(repoPath));
+
+            ScannerAgent.ScanResult scanResult = scanFuture.get();
             log.info("Phase 1 done: {} files, {} chunks", scanResult.fileCount(), scanResult.chunkCount());
 
-            // 阶段 2: 技术栈识别
-            updateStatus(dbId, "INDEXING");
-            IndexerAgent.ProjectProfile profile = indexerAgent.index(repoPath);
+            IndexerAgent.ProjectProfile profile = indexFuture.get();
             log.info("Phase 2 done: techStack={}", profile.techStack());
 
-            // 阶段 3: 分模块分析 (Map-Reduce)
+            // Stage 3: ANALYZING
             updateStatus(dbId, "ANALYZING");
             List<AnalyzerAgent.ModuleAnalysis> modules = analyzerAgent.analyze(taskId, repoPath);
             log.info("Phase 3 done: {} modules analyzed", modules.size());
 
-            // 阶段 4: 生成报告
+            // Stage 4 + MinIO 上传并行
             updateStatus(dbId, "REPORTING");
-            String report = reporterAgent.generateReport(profile, modules, scanResult);
+            Future<String> reportFuture = vtExecutor.submit(
+                    () -> reporterAgent.generateReport(profile, modules, scanResult));
+            Future<Void> uploadFuture = vtExecutor.submit(
+                    () -> { uploadToMinio(taskId, repoPath); return null; });
+
+            String report = reportFuture.get();
             log.info("Phase 4 done: report generated ({} chars)", report.length());
 
-            // 上传仓库到 MinIO
-            uploadToMinio(taskId, repoPath);
+            try { uploadFuture.get(); } catch (Exception e) {
+                log.warn("MinIO upload failed: {}", e.getMessage());
+            }
 
             // 完成
             AnalysisTask task = new AnalysisTask();
@@ -107,7 +123,6 @@ public class AnalysisPipeline {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             try (GZIPOutputStream gos = new GZIPOutputStream(baos);
                  ObjectOutputStream oos = new ObjectOutputStream(gos)) {
-                // 简化：只上传文件清单作为归档索引
                 List<String> files = Files.walk(root)
                         .filter(Files::isRegularFile)
                         .map(p -> root.relativize(p).toString())

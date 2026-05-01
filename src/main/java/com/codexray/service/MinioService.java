@@ -73,4 +73,16 @@ public class MinioService {
             return false;
         }
     }
+
+    public void delete(String objectName) {
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket)
+                    .object(objectName)
+                    .build());
+            log.debug("Deleted from MinIO: {}", objectName);
+        } catch (Exception e) {
+            throw new RuntimeException("MinIO delete failed: " + e.getMessage(), e);
+        }
+    }
 }

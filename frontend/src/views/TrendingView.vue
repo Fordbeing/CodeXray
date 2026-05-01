@@ -27,14 +27,18 @@
           <el-icon><Message /></el-icon>
           订阅日报
         </el-button>
+        <el-button text type="info" size="small" @click="showUnsubscribe = true">
+          退订
+        </el-button>
       </div>
     </div>
 
-    <div v-loading="loading">
+    <div class="trending-body" v-loading="loading">
       <div v-if="repos.length === 0 && !loading" class="empty-state">
         <el-empty description="暂无热点数据，点击刷新获取今日热点" />
       </div>
 
+      <!-- 左侧：热点列表 -->
       <div class="repo-list">
         <div v-for="(repo, i) in repos" :key="i" class="repo-card">
           <div class="card-left">
@@ -78,6 +82,69 @@
           </div>
         </div>
       </div>
+
+      <!-- 右侧：信息面板 -->
+      <div class="side-panel" v-if="repos.length > 0">
+        <!-- Top 3 高亮 -->
+        <div class="panel-card">
+          <div class="panel-title">Top 3 热门</div>
+          <div v-for="(repo, i) in repos.slice(0, 3)" :key="i" class="top-item">
+            <div class="top-rank" :class="rankClass(i)">{{ i + 1 }}</div>
+            <div class="top-info">
+              <a :href="repo.repoUrl" target="_blank" class="top-name">{{ repo.repoName }}</a>
+              <div class="top-meta">
+                <span v-if="repo.stars" class="top-star">
+                  <svg viewBox="0 0 16 16" width="11" height="11"><path fill="#e3b341" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+                  {{ formatNumber(repo.stars) }}
+                </span>
+                <el-tag v-if="repo.language" size="small" type="success" effect="light">{{ repo.language }}</el-tag>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 语言分布 -->
+        <div class="panel-card">
+          <div class="panel-title">语言分布</div>
+          <div class="lang-stats">
+            <div v-for="item in langStats" :key="item.name" class="lang-row">
+              <div class="lang-row-header">
+                <span class="lang-row-name">
+                  <span class="lang-dot" :style="{ background: langColor(item.name) }"></span>
+                  {{ item.name }}
+                </span>
+                <span class="lang-row-count">{{ item.count }} 个项目</span>
+              </div>
+              <div class="lang-bar-bg">
+                <div class="lang-bar-fill" :style="{ width: item.pct + '%', background: langColor(item.name) }"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 数据概览 -->
+        <div class="panel-card">
+          <div class="panel-title">数据概览</div>
+          <div class="overview-grid">
+            <div class="overview-item">
+              <span class="overview-num">{{ repos.length }}</span>
+              <span class="overview-label">热门项目</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-num">{{ langStats.length }}</span>
+              <span class="overview-label">编程语言</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-num">{{ totalStars }}</span>
+              <span class="overview-label">总 Stars</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-num">{{ totalTodayStars }}</span>
+              <span class="overview-label">今日新增</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <el-dialog v-model="showSubscribe" title="订阅每日热点日报" width="420px" class="subscribe-dialog">
@@ -98,13 +165,22 @@
         <el-button type="primary" :loading="subscribing" size="large" @click="handleSubscribe">立即订阅</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showUnsubscribe" title="取消订阅" width="400px">
+      <p class="subscribe-hint">输入您订阅时使用的邮箱地址，即可取消每日热点推送</p>
+      <el-input v-model="unsubEmail" placeholder="your@email.com" size="large" />
+      <template #footer>
+        <el-button @click="showUnsubscribe = false">取消</el-button>
+        <el-button type="danger" :loading="unsubscribing" @click="handleUnsubscribe">确认退订</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getTodayTrending, getTrendingByDate, refreshTrending, subscribeEmail } from '../api/trending'
+import { getTodayTrending, getTrendingByDate, refreshTrending, subscribeEmail, unsubscribeEmail } from '../api/trending'
 
 const repos = ref([])
 const loading = ref(false)
@@ -115,6 +191,10 @@ const lang = ref('zh')
 const showSubscribe = ref(false)
 const subscribing = ref(false)
 const subForm = ref({ email: '', language: 'zh' })
+
+const showUnsubscribe = ref(false)
+const unsubscribing = ref(false)
+const unsubEmail = ref('')
 
 const LANG_COLORS = {
   JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
@@ -141,11 +221,38 @@ function formatNumber(n) {
   return String(num)
 }
 
+const langStats = computed(() => {
+  const counts = {}
+  let total = 0
+  for (const r of repos.value) {
+    if (r.language) {
+      counts[r.language] = (counts[r.language] || 0) + 1
+      total++
+    }
+  }
+  if (total === 0) return []
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count, pct: Math.round((count / total) * 100) }))
+})
+
+const totalStars = computed(() => {
+  const sum = repos.value.reduce((s, r) => s + (parseInt(r.stars) || 0), 0)
+  return formatNumber(sum)
+})
+
+const totalTodayStars = computed(() => {
+  const sum = repos.value.reduce((s, r) => s + (parseInt(r.todayStars) || 0), 0)
+  return sum > 0 ? '+' + formatNumber(sum) : '-'
+})
+
 function formatAnalysis(text) {
   if (!text) return ''
   return text
     .replace(/\n/g, '<br>')
     .replace(/【([^】]+)】/g, '<div class="analysis-section-title">$1</div>')
+    .replace(/\*\*([^*]+)\*\*/g, '<div class="analysis-section-title">$1</div>')
+    .replace(/^#+\s*(.+)$/gm, '<div class="analysis-section-title">$1</div>')
 }
 
 async function loadToday() {
@@ -203,6 +310,24 @@ async function handleSubscribe() {
   }
 }
 
+async function handleUnsubscribe() {
+  if (!unsubEmail.value) {
+    ElMessage.warning('请输入邮箱地址')
+    return
+  }
+  unsubscribing.value = true
+  try {
+    await unsubscribeEmail(unsubEmail.value)
+    ElMessage.success('已成功取消订阅')
+    showUnsubscribe.value = false
+    unsubEmail.value = ''
+  } catch (e) {
+    // handled by interceptor
+  } finally {
+    unsubscribing.value = false
+  }
+}
+
 onMounted(() => {
   loadToday()
 })
@@ -210,7 +335,8 @@ onMounted(() => {
 
 <style scoped>
 .trending-page {
-  max-width: 960px;
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
 .page-header {
@@ -250,19 +376,39 @@ onMounted(() => {
   padding: 80px 0;
 }
 
-/* ===== Repo Card ===== */
+/* ===== 左右布局 ===== */
+.trending-body {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
 .repo-list {
+  flex: 3;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 
+.side-panel {
+  flex: 1;
+  min-width: 240px;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 28px;
+}
+
+/* ===== Repo Card ===== */
 .repo-card {
   display: flex;
   gap: 16px;
   background: #ffffff;
   border: 1px solid #d8dee4;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 20px;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -419,10 +565,238 @@ onMounted(() => {
   margin-top: 0;
 }
 
+/* ===== 右侧面板 ===== */
+.panel-card {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2328;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+/* Top 3 */
+.top-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.top-item:last-child {
+  border-bottom: none;
+}
+
+.top-rank {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: #f6f8fa;
+  color: #656d76;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.top-rank.rank-gold {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #92400e;
+}
+
+.top-rank.rank-silver {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.top-rank.rank-bronze {
+  background: linear-gradient(135deg, #fef2f2, #fed7aa);
+  color: #9a3412;
+}
+
+.top-info {
+  min-width: 0;
+}
+
+.top-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2328;
+  text-decoration: none;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-name:hover {
+  color: #2da44e;
+}
+
+.top-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 3px;
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.top-star {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 语言分布 */
+.lang-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lang-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.lang-row-name {
+  font-size: 12px;
+  color: #1f2328;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.lang-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.lang-row-count {
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.lang-bar-bg {
+  height: 6px;
+  background: #f0f2f5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.lang-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+/* 数据概览 */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.overview-item {
+  text-align: center;
+  padding: 10px 0;
+  background: #f8faf9;
+  border-radius: 8px;
+}
+
+.overview-num {
+  display: block;
+  font-size: 20px;
+  font-weight: 800;
+  color: #1f2328;
+}
+
+.overview-label {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 2px;
+}
+
 /* ===== Subscribe Dialog ===== */
 .subscribe-hint {
   font-size: 13px;
   color: #656d76;
   margin: 0 0 16px;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 1024px) {
+  .side-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .page-title {
+    font-size: 22px;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .repo-card {
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .card-left {
+    display: flex;
+  }
+
+  .rank-badge {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+    border-radius: 6px;
+  }
+
+  .card-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .repo-name {
+    font-size: 15px;
+  }
+
+  .repo-stats {
+    gap: 10px;
+  }
+
+  .repo-desc {
+    font-size: 13px;
+  }
+
+  .repo-analysis {
+    padding: 12px;
+  }
 }
 </style>

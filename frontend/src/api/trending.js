@@ -15,3 +15,7 @@ export function refreshTrending(lang = 'zh') {
 export function subscribeEmail(email, language = 'zh') {
   return request.post('/email/subscribe', null, { params: { email, language } })
 }
+
+export function unsubscribeEmail(email) {
+  return request.post('/email/unsubscribe', null, { params: { email } })
+}

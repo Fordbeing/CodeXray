@@ -6,6 +6,7 @@ import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.dto.AnalysisResultResponse;
 import com.codexray.model.dto.RepoPreviewResponse;
 import com.codexray.model.entity.AnalysisTask;
+import com.codexray.rag.VectorStoreService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class AnalysisService {
@@ -24,13 +26,21 @@ public class AnalysisService {
     private final GitCloneService gitCloneService;
     private final CodeReaderService codeReaderService;
     private final AnalysisPipeline analysisPipeline;
+    private final VectorStoreService vectorStoreService;
+    private final MinioService minioService;
+
+    // 预览缓存: repoUrl → preview result
+    private final ConcurrentHashMap<String, RepoPreviewResponse> previewCache = new ConcurrentHashMap<>();
 
     public AnalysisService(AnalysisTaskMapper taskMapper, GitCloneService gitCloneService,
-                           CodeReaderService codeReaderService, AnalysisPipeline analysisPipeline) {
+                           CodeReaderService codeReaderService, AnalysisPipeline analysisPipeline,
+                           VectorStoreService vectorStoreService, MinioService minioService) {
         this.taskMapper = taskMapper;
         this.gitCloneService = gitCloneService;
         this.codeReaderService = codeReaderService;
         this.analysisPipeline = analysisPipeline;
+        this.vectorStoreService = vectorStoreService;
+        this.minioService = minioService;
     }
 
     public String submitAnalysis(String repoUrl) {
@@ -102,16 +112,45 @@ public class AnalysisService {
     }
 
     public boolean deleteTask(String taskId) {
+        // 1. 删除 Elasticsearch 向量索引
+        try {
+            vectorStoreService.deleteByTaskId(taskId);
+            log.info("Deleted ES chunks for task: {}", taskId);
+        } catch (Exception e) {
+            log.warn("Failed to delete ES chunks for task {}: {}", taskId, e.getMessage());
+        }
+
+        // 2. 删除 MinIO 归档文件
+        try {
+            String objectName = "repos/" + taskId + "/archive.tar.gz";
+            if (minioService.exists(objectName)) {
+                minioService.delete(objectName);
+                log.info("Deleted MinIO archive for task: {}", taskId);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to delete MinIO archive for task {}: {}", taskId, e.getMessage());
+        }
+
+        // 3. 删除数据库记录
         return taskMapper.delete(
                 new QueryWrapper<AnalysisTask>().eq("task_id", taskId)
         ) > 0;
     }
 
     public RepoPreviewResponse previewRepo(String repoUrl) {
+        // 命中缓存直接返回
+        RepoPreviewResponse cached = previewCache.get(repoUrl);
+        if (cached != null) {
+            log.debug("Preview cache hit for: {}", repoUrl);
+            return cached;
+        }
+
         String localPath = null;
         try {
             localPath = gitCloneService.clone(repoUrl);
-            return codeReaderService.preview(repoUrl, localPath);
+            RepoPreviewResponse preview = codeReaderService.preview(repoUrl, localPath);
+            previewCache.put(repoUrl, preview);
+            return preview;
         } catch (Exception e) {
             log.error("Preview failed for repo: {}", repoUrl, e);
             throw new RuntimeException("Preview failed: " + e.getMessage(), e);
