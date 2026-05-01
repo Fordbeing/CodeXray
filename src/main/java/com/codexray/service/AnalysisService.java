@@ -1,7 +1,7 @@
 package com.codexray.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.codexray.llm.LlmClient;
+import com.codexray.agent.AnalysisPipeline;
 import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.dto.AnalysisResultResponse;
 import com.codexray.model.dto.RepoPreviewResponse;
@@ -23,14 +23,14 @@ public class AnalysisService {
     private final AnalysisTaskMapper taskMapper;
     private final GitCloneService gitCloneService;
     private final CodeReaderService codeReaderService;
-    private final LlmClient llmClient;
+    private final AnalysisPipeline analysisPipeline;
 
     public AnalysisService(AnalysisTaskMapper taskMapper, GitCloneService gitCloneService,
-                           CodeReaderService codeReaderService, LlmClient llmClient) {
+                           CodeReaderService codeReaderService, AnalysisPipeline analysisPipeline) {
         this.taskMapper = taskMapper;
         this.gitCloneService = gitCloneService;
         this.codeReaderService = codeReaderService;
-        this.llmClient = llmClient;
+        this.analysisPipeline = analysisPipeline;
     }
 
     public String submitAnalysis(String repoUrl) {
@@ -54,20 +54,10 @@ public class AnalysisService {
             updateStatus(id, "CLONING");
             localPath = gitCloneService.clone(repoUrl);
 
-            updateStatus(id, "ANALYZING");
-            String report = llmClient.analyze(localPath);
+            analysisPipeline.execute(taskId, id, localPath, repoUrl);
 
-            AnalysisTask task = new AnalysisTask();
-            task.setId(id);
-            task.setStatus("COMPLETED");
-            task.setReport(report);
-            task.setUpdatedAt(LocalDateTime.now());
-            taskMapper.updateById(task);
-
-            log.info("Analysis completed for task: {}", taskId);
         } catch (Exception e) {
             log.error("Analysis failed for task: {}", taskId, e);
-
             AnalysisTask task = new AnalysisTask();
             task.setId(id);
             task.setStatus("FAILED");

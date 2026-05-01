@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -113,25 +114,49 @@ public class AnthropicLlmClient implements LlmClient {
     }
 
     @Override
+    public String chatWithContext(String systemPrompt, List<Map<String, String>> history, String question) {
+        log.info("LLM chatWithContext, history turns: {}, question length: {}", history.size(), question.length());
+
+        // 构建消息列表：历史 + 当前问题
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (Map<String, String> h : history) {
+            messages.add(Map.of("role", h.get("role"), "content", h.get("content")));
+        }
+        messages.add(Map.of("role", "user", "content", question));
+
+        return callMessagesApiMultiTurn(systemPrompt, messages);
+    }
+
+    @Override
     public String analyzeTrendingRepo(String repoName, String description, String lang) {
         boolean isZh = !"en".equals(lang);
         String systemPrompt = isZh
                 ? """
-                你是一个技术分析专家。请对以下 GitHub 热门项目进行简要分析，用中文回答。
-                请按以下格式输出（每个部分一句话即可，简明扼要）：
-                - 项目介绍：这个项目是什么，解决什么问题
-                - 应用场景：适用于哪些场景，谁会用到它
-                - 技术架构：核心技术栈和架构特点
-                - 项目亮点：与其他同类项目相比的核心优势
-                注意：每行以 "- " 开头，不要输出多余内容。"""
+                你是一个资深技术分析专家，擅长快速评估开源项目的价值和适用性。
+                请对以下 GitHub 热门项目进行分析，帮助开发者在 30 秒内判断这个项目是否值得关注。
+
+                输出格式要求（每部分 2-3 句话，信息密度高，不讲废话）：
+
+                【项目定位】这个项目是什么？一句话核心定位 + 它要解决的核心痛点。
+                【技术架构】核心技术栈是什么？架构设计有何特点？用了哪些关键技术？
+                【适用场景】谁会用到它？适合什么场景？能替代什么现有方案？
+                【核心亮点】与其他方案相比，它的 2-3 个最突出优势是什么？
+                【上手难度】学习曲线如何？有没有快速入门路径？
+
+                注意：严格按照以上 5 个标题输出，每个标题一行，内容紧随其后。不要输出多余的解释或寒暄。"""
                 : """
-                You are a technology analyst. Provide a brief analysis of the following GitHub trending project in English.
-                Use this format (one sentence per section, concise):
-                - Introduction: What this project is and what problem it solves
-                - Use Cases: Applicable scenarios and target users
-                - Tech Architecture: Core tech stack and architecture highlights
-                - Highlights: Key differentiators from similar projects
-                Note: Each line starts with "- ". No extra content.""";
+                You are a senior technology analyst skilled at quickly evaluating open-source project value and applicability.
+                Analyze the following GitHub trending project to help developers decide within 30 seconds whether it's worth attention.
+
+                Output format (2-3 sentences per section, high information density, no fluff):
+
+                [Positioning] What is this project? One-sentence core positioning + the core pain point it solves.
+                [Architecture] What is the core tech stack? What's notable about the architecture? Key technologies used?
+                [Use Cases] Who uses it? What scenarios is it suited for? What existing solutions can it replace?
+                [Highlights] What are 2-3 most prominent advantages over alternatives?
+                [Learning Curve] How steep is the learning curve? Quick start path available?
+
+                Note: Output exactly with the 5 section titles above, content follows immediately after each title. No extra explanation.""";
 
         String userContent = "项目名称: " + repoName + "\n项目描述: " + (description != null ? description : "No description");
 
@@ -148,14 +173,19 @@ public class AnthropicLlmClient implements LlmClient {
      * 小米端点格式: POST {baseUrl}/v1/messages
      */
     private String callMessagesApi(String systemPrompt, String userContent) {
-        Map<String, Object> requestBody = Map.of(
-                "model", model,
-                "max_tokens", maxTokens,
-                "system", systemPrompt,
-                "messages", List.of(
-                        Map.of("role", "user", "content", userContent)
-                )
-        );
+        return callMessagesApiMultiTurn(systemPrompt,
+                List.of(Map.of("role", "user", "content", userContent)));
+    }
+
+    /**
+     * 多轮对话 Messages API。
+     */
+    private String callMessagesApiMultiTurn(String systemPrompt, List<Map<String, Object>> messages) {
+        Map<String, Object> requestBody = new java.util.HashMap<>();
+        requestBody.put("model", model);
+        requestBody.put("max_tokens", maxTokens);
+        requestBody.put("system", systemPrompt);
+        requestBody.put("messages", messages);
 
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {

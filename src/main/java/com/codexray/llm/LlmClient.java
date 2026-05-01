@@ -17,6 +17,16 @@ public interface LlmClient {
     String chat(String repoPath, String question);
 
     /**
+     * 自定义上下文问答（支持 RAG 检索结果 + 多轮对话历史）。
+     *
+     * @param systemPrompt 系统提示（包含检索到的代码上下文）
+     * @param history      对话历史，每条为 {"role":"user"/"assistant","content":"..."}
+     * @param question     当前问题
+     * @return LLM 回答
+     */
+    String chatWithContext(String systemPrompt, java.util.List<java.util.Map<String, String>> history, String question);
+
+    /**
      * 对 GitHub Trending 热点仓库进行简要分析。
      *
      * @param repoName     仓库名称

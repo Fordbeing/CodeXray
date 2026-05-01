@@ -1,48 +1,61 @@
 <template>
   <aside class="sidebar">
     <div class="sidebar-logo">
-      <el-icon :size="24" color="#2da44e"><DataAnalysis /></el-icon>
-      <span class="logo-text">CodeXray</span>
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+          <path d="M12 2L2 7l10 5 10-5-10-5z" fill="#2da44e"/>
+          <path d="M2 17l10 5 10-5" stroke="#2da44e" stroke-width="2" fill="none"/>
+          <path d="M2 12l10 5 10-5" stroke="#2da44e" stroke-width="2" fill="none"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <span class="logo-name">CodeXray</span>
+        <span class="logo-tag">AI Code Analysis</span>
+      </div>
     </div>
-    <el-menu
-      :default-active="activeMenu"
-      :router="true"
-      class="sidebar-menu"
-    >
-      <el-menu-item index="/">
-        <el-icon><HomeFilled /></el-icon>
-        <span>仪表盘</span>
-      </el-menu-item>
-      <el-menu-item index="/analyze">
-        <el-icon><Search /></el-icon>
-        <span>仓库分析</span>
-      </el-menu-item>
-      <el-menu-item index="/chat">
-        <el-icon><ChatDotRound /></el-icon>
-        <span>代码问答</span>
-      </el-menu-item>
-      <el-menu-item index="/trending">
-        <el-icon><TrendCharts /></el-icon>
-        <span>热点推送</span>
-      </el-menu-item>
-      <el-menu-item index="/history">
-        <el-icon><List /></el-icon>
-        <span>分析历史</span>
-      </el-menu-item>
-    </el-menu>
+
+    <nav class="sidebar-nav">
+      <router-link
+        v-for="item in menuItems"
+        :key="item.path"
+        :to="item.path"
+        class="nav-item"
+        :class="{ active: isActive(item.path) }"
+      >
+        <el-icon :size="18"><component :is="item.icon" /></el-icon>
+        <span>{{ item.label }}</span>
+      </router-link>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="footer-badge">
+        <el-icon :size="14"><Promotion /></el-icon>
+        <span>Powered by LLM</span>
+      </div>
+    </div>
   </aside>
 </template>
 
 <script setup>
-import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import {
+  HomeFilled, Search, ChatDotRound, TrendCharts, List
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
-const activeMenu = computed(() => {
-  const path = route.path
-  if (path.startsWith('/analyze')) return '/analyze'
-  return path
-})
+
+const menuItems = [
+  { path: '/', label: '仪表盘', icon: HomeFilled },
+  { path: '/analyze', label: '仓库分析', icon: Search },
+  { path: '/chat', label: '代码问答', icon: ChatDotRound },
+  { path: '/trending', label: '热点推送', icon: TrendCharts },
+  { path: '/history', label: '分析历史', icon: List },
+]
+
+function isActive(path) {
+  if (path === '/') return route.path === '/'
+  return route.path.startsWith(path)
+}
 </script>
 
 <style scoped>
@@ -62,38 +75,82 @@ const activeMenu = computed(() => {
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 20px 20px 16px;
-  border-bottom: 1px solid #e8ecf0;
+  gap: 12px;
+  padding: 20px 20px 18px;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.logo-icon {
+  width: 36px;
+  height: 36px;
+  background: #f0fdf4;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .logo-text {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1f2328;
+  display: flex;
+  flex-direction: column;
 }
 
-.sidebar-menu {
+.logo-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2328;
+  line-height: 1.2;
+}
+
+.logo-tag {
+  font-size: 11px;
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.sidebar-nav {
   flex: 1;
-  border-right: none;
-  padding-top: 8px;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.sidebar-menu .el-menu-item {
-  height: 44px;
-  line-height: 44px;
-  margin: 2px 8px;
-  border-radius: 6px;
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
   color: #656d76;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.15s;
 }
 
-.sidebar-menu .el-menu-item:hover {
-  background-color: #f6f8fa;
+.nav-item:hover {
+  background: #f6f8fa;
   color: #1f2328;
 }
 
-.sidebar-menu .el-menu-item.is-active {
-  background-color: #f0fdf4;
-  color: #2da44e !important;
+.nav-item.active {
+  background: #f0fdf4;
+  color: #2da44e;
+  font-weight: 600;
+}
+
+.sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid #f0f2f5;
+}
+
+.footer-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #8b949e;
 }
 </style>

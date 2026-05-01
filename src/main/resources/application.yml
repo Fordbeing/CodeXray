@@ -9,8 +9,18 @@ codexray:
     api-key: ${LLM_API_KEY:tp-c8q3xyxmozqdwbhp3ofeqometsfnnnxt01xk9cp52r4iwvxw}
     model: ${LLM_MODEL:mimo-v2.5-pro}
     max-tokens: ${LLM_MAX_TOKENS:8192}
+    embedding-url: ${EMBEDDING_URL:https://token-plan-cn.xiaomimimo.com/v1}
+    embedding-model: ${EMBEDDING_MODEL:text-embedding-3-small}
   mail:
     enabled: ${MAIL_ENABLED:false}
+  elasticsearch:
+    host: ${ES_HOST:localhost}
+    port: ${ES_PORT:9200}
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:codexray}
+    secret-key: ${MINIO_SECRET_KEY:codexray123}
+    bucket: ${MINIO_BUCKET:codexray}
 
 spring:
   profiles:

@@ -152,6 +152,14 @@
 
         <!-- 总结 -->
         <el-alert v-if="report.verdict" :title="report.verdict" type="success" :closable="false" show-icon />
+
+        <!-- 跳转问答 -->
+        <div class="chat-jump">
+          <el-button type="primary" size="large" @click="goToChat">
+            <el-icon style="margin-right: 4px"><ChatDotRound /></el-icon>
+            基于此分析进行代码问答
+          </el-button>
+        </div>
       </el-card>
     </div>
 
@@ -288,6 +296,10 @@ onMounted(async () => {
 onUnmounted(() => {
   stopPolling()
 })
+
+function goToChat() {
+  router.push({ path: '/chat', query: { repoUrl: repoUrl.value, taskId: taskId.value } })
+}
 </script>
 
 <style scoped>
@@ -457,5 +469,12 @@ onUnmounted(() => {
 .warn-list li {
   color: #d29922;
   margin-bottom: 6px;
+}
+
+.chat-jump {
+  text-align: center;
+  padding-top: 16px;
+  border-top: 1px solid #e8ecf0;
+  margin-top: 16px;
 }
 </style>

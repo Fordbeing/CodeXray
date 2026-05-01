@@ -5,5 +5,6 @@ import jakarta.validation.constraints.NotBlank;
 public record ChatRequest(
         @NotBlank String repoUrl,
         @NotBlank String question,
-        String sessionId
+        String sessionId,
+        String taskId
 ) {}

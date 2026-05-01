@@ -15,12 +15,12 @@ import AppSidebar from './AppSidebar.vue'
 .app-layout {
   display: flex;
   min-height: 100vh;
+  background: #f6f8fa;
 }
 
 .app-main {
   flex: 1;
   margin-left: 220px;
-  padding: 32px;
-  max-width: 1080px;
+  padding: 28px 36px 48px;
 }
 </style>

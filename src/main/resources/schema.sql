@@ -40,3 +40,17 @@ CREATE TABLE IF NOT EXISTS email_subscriber (
     language      VARCHAR(8)    NOT NULL DEFAULT 'zh',
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS code_chunk (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    task_id       VARCHAR(64)   NOT NULL,
+    file_path     VARCHAR(1024) NOT NULL,
+    start_line    INT           NOT NULL,
+    end_line      INT           NOT NULL,
+    symbol_name   VARCHAR(256),
+    category      VARCHAR(32),
+    content_hash  VARCHAR(64)   NOT NULL,
+    chunk_index   INT           NOT NULL,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_task (task_id)
+);
