@@ -14,9 +14,16 @@ target/
 
 # Log
 *.log
+logs/
 
-# Env
+# Env / Secrets
 .env
+.env.local
+application-local.yml
 
 # Temp
 /tmp/codexray-clones/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

@@ -18,6 +18,25 @@ CREATE TABLE IF NOT EXISTS trending_repo (
     stars         VARCHAR(32),
     today_stars   VARCHAR(32),
     forks         VARCHAR(32),
+    analysis_zh   TEXT,
+    analysis_en   TEXT,
     trend_date    DATE          NOT NULL,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_history (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    session_id    VARCHAR(64)   NOT NULL,
+    repo_url      VARCHAR(512)  NOT NULL,
+    role          VARCHAR(16)   NOT NULL,
+    content       TEXT          NOT NULL,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS email_subscriber (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    email         VARCHAR(256)  NOT NULL UNIQUE,
+    active        BOOLEAN       NOT NULL DEFAULT TRUE,
+    language      VARCHAR(8)    NOT NULL DEFAULT 'zh',
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

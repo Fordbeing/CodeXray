@@ -1,5 +1,6 @@
 package com.codexray;
 
+import com.codexray.config.DotEnvConfig;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -9,6 +10,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class CodeXrayApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(CodeXrayApplication.class, args);
+        SpringApplication app = new SpringApplication(CodeXrayApplication.class);
+        app.addListeners(new DotEnvConfig());
+        app.run(args);
     }
 }

@@ -1,0 +1,96 @@
+:root {
+  /* 主色 - 绿色体系 */
+  --el-color-primary: #2da44e;
+  --el-color-primary-light-3: #56d391;
+  --el-color-primary-light-5: #7ee8a9;
+  --el-color-primary-light-7: #a6f0bc;
+  --el-color-primary-light-8: #cff7d6;
+  --el-color-primary-light-9: #f0fdf4;
+  --el-color-primary-dark-2: #218838;
+
+  /* 成功 */
+  --el-color-success: #2da44e;
+  --el-color-success-light-3: #56d391;
+  --el-color-success-light-5: #7ee8a9;
+  --el-color-success-light-7: #a6f0bc;
+  --el-color-success-light-8: #cff7d6;
+  --el-color-success-light-9: #f0fdf4;
+  --el-color-success-dark-2: #218838;
+
+  /* 警告 */
+  --el-color-warning: #d29922;
+  --el-color-warning-light-3: #e5b957;
+  --el-color-warning-light-5: #f0d078;
+  --el-color-warning-light-7: #f5e3a3;
+  --el-color-warning-light-8: #faefcc;
+  --el-color-warning-light-9: #fef6e6;
+  --el-color-warning-dark-2: #b08018;
+
+  /* 危险 */
+  --el-color-danger: #cf222e;
+  --el-color-danger-light-3: #e55660;
+  --el-color-danger-light-5: #f07a82;
+  --el-color-danger-light-7: #f5a3a8;
+  --el-color-danger-light-8: #fac8cc;
+  --el-color-danger-light-9: #fde8ea;
+  --el-color-danger-dark-2: #a91d27;
+
+  /* 信息 */
+  --el-color-info: #656d76;
+
+  /* 文字 */
+  --el-text-color-primary: #1f2328;
+  --el-text-color-regular: #656d76;
+  --el-text-color-secondary: #8b949e;
+  --el-text-color-placeholder: #8b949e;
+
+  /* 边框 */
+  --el-border-color: #d0d7de;
+  --el-border-color-light: #e8ecf0;
+  --el-border-color-lighter: #f0f2f5;
+
+  /* 背景 */
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f6f8fa;
+  --el-bg-color-overlay: #ffffff;
+
+  /* 填充 */
+  --el-fill-color: #f6f8fa;
+  --el-fill-color-light: #f6f8fa;
+  --el-fill-color-lighter: #ffffff;
+
+  /* 圆角 */
+  --el-border-radius-base: 6px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 20px;
+
+  /* 字体 */
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+}
+
+/* 全局覆盖 */
+body {
+  margin: 0;
+  background-color: #f6f8fa;
+  color: #1f2328;
+  font-family: var(--el-font-family);
+}
+
+.el-button--primary {
+  --el-button-bg-color: #2da44e;
+  --el-button-border-color: #2da44e;
+  --el-button-hover-bg-color: #218838;
+  --el-button-hover-border-color: #218838;
+  --el-button-active-bg-color: #1a7f37;
+  --el-button-active-border-color: #1a7f37;
+}
+
+.el-menu-item.is-active {
+  color: #2da44e !important;
+}
+
+.el-tag--success {
+  --el-tag-bg-color: #f0fdf4;
+  --el-tag-text-color: #2da44e;
+  --el-tag-border-color: #cff7d6;
+}

@@ -15,4 +15,14 @@ public interface LlmClient {
      * @return LLM 回答
      */
     String chat(String repoPath, String question);
+
+    /**
+     * 对 GitHub Trending 热点仓库进行简要分析。
+     *
+     * @param repoName     仓库名称
+     * @param description  仓库描述
+     * @param lang         语言: zh 或 en
+     * @return 分析文本
+     */
+    String analyzeTrendingRepo(String repoName, String description, String lang);
 }

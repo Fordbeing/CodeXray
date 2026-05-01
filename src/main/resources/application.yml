@@ -1,29 +1,36 @@
 server:
-  port: 8080
+  port: 8081
 
 codexray:
   clone:
     base-dir: /tmp/codexray-clones
   llm:
-    base-url: ${LLM_BASE_URL:https://api.openai.com/v1}
-    api-key: ${LLM_API_KEY:sk-placeholder}
-    model: ${LLM_MODEL:gpt-4o}
+    base-url: ${LLM_BASE_URL:https://token-plan-cn.xiaomimimo.com/anthropic}
+    api-key: ${LLM_API_KEY:tp-c8q3xyxmozqdwbhp3ofeqometsfnnnxt01xk9cp52r4iwvxw}
+    model: ${LLM_MODEL:mimo-v2.5-pro}
+    max-tokens: ${LLM_MAX_TOKENS:8192}
   mail:
-    enabled: false
+    enabled: ${MAIL_ENABLED:false}
 
 spring:
   profiles:
     active: dev
   jackson:
     default-property-inclusion: non_null
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000
   mail:
-    host: ${MAIL_HOST:smtp.example.com}
-    port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:noreply@example.com}
+    host: ${MAIL_HOST:smtp.163.com}
+    port: ${MAIL_PORT:465}
+    username: ${MAIL_USERNAME:}
     password: ${MAIL_PASSWORD:}
     properties:
       mail:
         smtp:
           auth: true
-          starttls:
+          ssl:
             enable: true
