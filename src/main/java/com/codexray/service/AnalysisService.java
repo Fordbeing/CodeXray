@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.codexray.llm.LlmClient;
 import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.dto.AnalysisResultResponse;
+import com.codexray.model.dto.RepoPreviewResponse;
 import com.codexray.model.entity.AnalysisTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -20,11 +22,14 @@ public class AnalysisService {
 
     private final AnalysisTaskMapper taskMapper;
     private final GitCloneService gitCloneService;
+    private final CodeReaderService codeReaderService;
     private final LlmClient llmClient;
 
-    public AnalysisService(AnalysisTaskMapper taskMapper, GitCloneService gitCloneService, LlmClient llmClient) {
+    public AnalysisService(AnalysisTaskMapper taskMapper, GitCloneService gitCloneService,
+                           CodeReaderService codeReaderService, LlmClient llmClient) {
         this.taskMapper = taskMapper;
         this.gitCloneService = gitCloneService;
+        this.codeReaderService = codeReaderService;
         this.llmClient = llmClient;
     }
 
@@ -44,9 +49,10 @@ public class AnalysisService {
 
     @Async("analysisExecutor")
     public void asyncAnalyze(Long id, String taskId, String repoUrl) {
+        String localPath = null;
         try {
             updateStatus(id, "CLONING");
-            String localPath = gitCloneService.clone(repoUrl);
+            localPath = gitCloneService.clone(repoUrl);
 
             updateStatus(id, "ANALYZING");
             String report = llmClient.analyze(localPath);
@@ -68,6 +74,10 @@ public class AnalysisService {
             task.setErrorMessage(e.getMessage());
             task.setUpdatedAt(LocalDateTime.now());
             taskMapper.updateById(task);
+        } finally {
+            if (localPath != null) {
+                gitCloneService.cleanup(localPath);
+            }
         }
     }
 
@@ -87,6 +97,39 @@ public class AnalysisService {
                 task.getCreatedAt(),
                 task.getUpdatedAt()
         );
+    }
+
+    public List<AnalysisResultResponse> listTasks(int limit) {
+        QueryWrapper<AnalysisTask> wrapper = new QueryWrapper<AnalysisTask>()
+                .orderByDesc("created_at")
+                .last("LIMIT " + Math.min(limit, 100));
+        return taskMapper.selectList(wrapper).stream()
+                .map(t -> new AnalysisResultResponse(
+                        t.getTaskId(), t.getRepoUrl(), t.getStatus(),
+                        t.getReport(), t.getErrorMessage(),
+                        t.getCreatedAt(), t.getUpdatedAt()))
+                .toList();
+    }
+
+    public boolean deleteTask(String taskId) {
+        return taskMapper.delete(
+                new QueryWrapper<AnalysisTask>().eq("task_id", taskId)
+        ) > 0;
+    }
+
+    public RepoPreviewResponse previewRepo(String repoUrl) {
+        String localPath = null;
+        try {
+            localPath = gitCloneService.clone(repoUrl);
+            return codeReaderService.preview(repoUrl, localPath);
+        } catch (Exception e) {
+            log.error("Preview failed for repo: {}", repoUrl, e);
+            throw new RuntimeException("Preview failed: " + e.getMessage(), e);
+        } finally {
+            if (localPath != null) {
+                gitCloneService.cleanup(localPath);
+            }
+        }
     }
 
     private void updateStatus(Long id, String status) {

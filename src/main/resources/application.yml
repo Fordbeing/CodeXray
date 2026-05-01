@@ -4,7 +4,26 @@ server:
 codexray:
   clone:
     base-dir: /tmp/codexray-clones
+  llm:
+    base-url: ${LLM_BASE_URL:https://api.openai.com/v1}
+    api-key: ${LLM_API_KEY:sk-placeholder}
+    model: ${LLM_MODEL:gpt-4o}
+  mail:
+    enabled: false
 
 spring:
   profiles:
     active: dev
+  jackson:
+    default-property-inclusion: non_null
+  mail:
+    host: ${MAIL_HOST:smtp.example.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:noreply@example.com}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true

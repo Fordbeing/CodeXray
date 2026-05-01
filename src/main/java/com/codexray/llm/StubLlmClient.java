@@ -51,4 +51,11 @@ public class StubLlmClient implements LlmClient {
                 }
                 """.formatted(primaryLang, files.size(), primaryLang);
     }
+
+    @Override
+    public String chat(String repoPath, String question) {
+        return "[Dev Stub] 这是一个模拟回答。你的问题是：" + question
+                + "\n\n当前仓库路径：" + repoPath
+                + "\n\n切换到 prod profile 使用真实的 LLM 问答功能。";
+    }
 }
