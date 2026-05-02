@@ -259,11 +259,15 @@ function restoreState() {
     if (state.repoUrl && !repoUrl.value) repoUrl.value = state.repoUrl
     if (state.currentSessionId) currentSessionId.value = state.currentSessionId
     if (state.currentTaskId && !currentTaskId.value) currentTaskId.value = state.currentTaskId
-    if (state.messages && state.messages.length > 0) {
-      messages.value = state.messages
-      resumePolls()
+    // 不从 localStorage 恢复 messages 和 sessions，由 loadSessions + switchSession 从后端加载
+    // 但恢复正在进行的轮询
+    if (state.messages) {
+      const pollingMsgs = state.messages.filter(m => (m.pending || m.streaming) && m.pollId)
+      if (pollingMsgs.length > 0) {
+        messages.value = state.messages
+        resumePolls()
+      }
     }
-    if (state.sessions) sessions.value = state.sessions
   } catch { /* ignore */ }
 }
 
@@ -330,6 +334,23 @@ async function loadSessions() {
   try {
     const url = repoUrl.value.trim() || undefined
     sessions.value = await listChatSessions(url) || []
+
+    // 同步当前会话的消息：确保左侧列表和右侧消息一致
+    if (currentSessionId.value) {
+      const exists = sessions.value.some(s => s.sessionId === currentSessionId.value)
+      if (exists) {
+        // 当前会话存在，从后端加载最新消息
+        const history = await getChatHistory(currentSessionId.value)
+        messages.value = (history || []).map(h => ({ role: h.role, content: h.content }))
+      } else {
+        // 当前会话已被清理，重置
+        currentSessionId.value = null
+        messages.value = []
+      }
+    } else if (messages.value.length > 0) {
+      // 没有当前会话但有残留消息，清空
+      messages.value = []
+    }
     saveState()
   } catch (e) {
     console.error('加载会话列表失败:', e)
