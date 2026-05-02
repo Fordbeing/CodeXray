@@ -90,21 +90,23 @@ public class CodeChatService {
         virtualExecutor.execute(() -> {
             try {
                 StringBuilder answerBuilder = new StringBuilder();
+                // 令牌缓冲：每 200ms 最多更新一次 pendingResults，减少高频写入
+                final long[] lastUpdate = {0};
+                java.util.function.Consumer<String> onToken = token -> {
+                    answerBuilder.append(token);
+                    long now = System.currentTimeMillis();
+                    if (now - lastUpdate[0] >= 200) {
+                        lastUpdate[0] = now;
+                        pendingResults.put(pollId, new ChatPending(
+                                pollId, sid, "assistant", answerBuilder.toString(),
+                                false, true, null, LocalDateTime.now()));
+                    }
+                };
 
                 if (taskId != null && !taskId.isBlank()) {
-                    ragAnswerStreaming(taskId, question, history, token -> {
-                        answerBuilder.append(token);
-                        pendingResults.put(pollId, new ChatPending(
-                                pollId, sid, "assistant", answerBuilder.toString(),
-                                false, true, null, LocalDateTime.now()));
-                    });
+                    ragAnswerStreaming(taskId, question, history, onToken);
                 } else {
-                    freeAnswerStreaming(repoUrl, question, history, token -> {
-                        answerBuilder.append(token);
-                        pendingResults.put(pollId, new ChatPending(
-                                pollId, sid, "assistant", answerBuilder.toString(),
-                                false, true, null, LocalDateTime.now()));
-                    });
+                    freeAnswerStreaming(repoUrl, question, history, onToken);
                 }
 
                 String fullAnswer = answerBuilder.toString();

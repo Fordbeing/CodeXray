@@ -108,7 +108,7 @@
                 <span class="pending-text">AI 正在思考中...</span>
               </div>
               <!-- 流式输出中：有内容 + 光标 -->
-              <div v-else-if="msg.streaming" class="message-text markdown-body">
+              <div v-else-if="msg.streaming" class="message-text markdown-body streaming-msg">
                 <div v-html="renderMd(msg.content)"></div>
                 <span class="stream-cursor"></span>
               </div>
@@ -126,6 +126,7 @@
               </div>
             </div>
           </div>
+          <div class="scroll-anchor"></div>
         </div>
 
         <!-- 输入区 -->
@@ -161,13 +162,20 @@ marked.setOptions({
   pedantic: false,
 })
 
+// Cache last parsed result to avoid re-parsing identical content on every poll tick
+let _lastMdInput = ''
+let _lastMdOutput = ''
+
 function renderMd(text) {
   if (!text) return ''
+  if (text === _lastMdInput) return _lastMdOutput
   try {
-    return marked.parse(text)
+    _lastMdOutput = marked.parse(text)
   } catch {
-    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    _lastMdOutput = text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
   }
+  _lastMdInput = text
+  return _lastMdOutput
 }
 
 const route = useRoute()
@@ -261,6 +269,7 @@ function saveState() {
     currentTaskId: currentTaskId.value,
     messages: messages.value,
     sessions: sessions.value,
+    savedAt: Date.now(),
   }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
@@ -275,13 +284,15 @@ function restoreState() {
     if (state.repoUrl && !repoUrl.value) repoUrl.value = state.repoUrl
     if (state.currentSessionId) currentSessionId.value = state.currentSessionId
     if (state.currentTaskId && !currentTaskId.value) currentTaskId.value = state.currentTaskId
-    // 不从 localStorage 恢复 messages 和 sessions，由 loadSessions + switchSession 从后端加载
-    // 但恢复正在进行的轮询
-    if (state.messages) {
-      const pollingMsgs = state.messages.filter(m => (m.pending || m.streaming) && m.pollId)
-      if (pollingMsgs.length > 0) {
-        messages.value = state.messages
-        resumePolls()
+    // 恢复活跃轮询（仅 5 分钟内的，超过的说明后端已清理，由 loadSessions 加载完整结果）
+    if (state.messages && state.savedAt) {
+      const age = Date.now() - state.savedAt
+      if (age < 5 * 60 * 1000) {
+        const pollingMsgs = state.messages.filter(m => (m.pending || m.streaming) && m.pollId)
+        if (pollingMsgs.length > 0) {
+          messages.value = state.messages
+          resumePolls()
+        }
       }
     }
   } catch { /* ignore */ }
@@ -303,7 +314,19 @@ function startPolling(pollId, messageIndex) {
   const timer = setInterval(async () => {
     try {
       const result = await getChatResult(pollId)
-      if (!result) return
+
+      // 结果已过期（用户离开期间后端已完成并清理），从 API 重新加载
+      if (!result) {
+        clearInterval(timer)
+        activePolls.delete(pollId)
+        messages.value[messageIndex] = {
+          role: 'assistant',
+          content: messages.value[messageIndex]?.content || '（消息已过期，请刷新页面重新查看）',
+        }
+        saveState()
+        loadSessions()
+        return
+      }
 
       // 流式进行中：更新内容
       if (result.streaming && !result.done) {
@@ -335,12 +358,13 @@ function startPolling(pollId, messageIndex) {
         }
         saveState()
         scrollToBottom()
+        nextTick(() => addCodeCopyButtons())
         loadSessions()
       }
     } catch (e) {
       console.error('轮询失败:', e)
     }
-  }, 600)
+  }, 800)
 
   activePolls.set(pollId, { timer, messageIndex })
 }
@@ -355,8 +379,12 @@ async function loadSessions() {
     if (currentSessionId.value) {
       const exists = sessions.value.some(s => s.sessionId === currentSessionId.value)
       if (exists) {
-        const history = await getChatHistory(currentSessionId.value)
-        messages.value = (history || []).map(h => ({ role: h.role, content: h.content }))
+        // 有活跃轮询时，不要覆盖正在流式输出的消息
+        const hasActivePoll = activePolls.size > 0
+        if (!hasActivePoll) {
+          const history = await getChatHistory(currentSessionId.value)
+          messages.value = (history || []).map(h => ({ role: h.role, content: h.content }))
+        }
       } else {
         currentSessionId.value = null
         messages.value = []
@@ -509,10 +537,15 @@ function formatTime(timeStr) {
   return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 }
 
+let _scrollTimer = null
 async function scrollToBottom() {
-  await nextTick()
-  if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-  addCodeCopyButtons()
+  if (_scrollTimer) return
+  _scrollTimer = requestAnimationFrame(() => {
+    _scrollTimer = null
+    if (messagesRef.value) {
+      messagesRef.value.scrollTo({ top: messagesRef.value.scrollHeight, behavior: 'smooth' })
+    }
+  })
 }
 
 async function copyMessage(text) {
@@ -661,7 +694,8 @@ function addCodeCopyButtons() {
 
 /* ===== 聊天区 ===== */
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.chat-messages { flex: 1; overflow-y: auto; padding: 16px 0; }
+.chat-messages { flex: 1; overflow-y: auto; overflow-anchor: auto; padding: 16px 0; scroll-behavior: smooth; }
+.scroll-anchor { overflow-anchor: auto; height: 1px; }
 
 .empty-chat {
   display: flex; flex-direction: column; align-items: center;
@@ -681,7 +715,7 @@ function addCodeCopyButtons() {
 .message.user .message-avatar { background: #f6f8fa; color: #656d76; }
 .message.assistant .message-avatar { background: #f0fdf4; }
 
-.message-content { max-width: 70%; }
+.message-content { max-width: 70%; transition: width 0.1s ease; }
 
 .message-text {
   padding: 10px 14px; border-radius: 10px;
@@ -871,6 +905,12 @@ function addCodeCopyButtons() {
   display: inline-block; width: 2px; height: 16px;
   background: #2da44e; margin-left: 2px; vertical-align: text-bottom;
   animation: blink 1s infinite;
+}
+
+/* Streaming message - prevent layout thrash */
+.streaming-msg {
+  contain: layout style;
+  will-change: contents;
 }
 
 @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }

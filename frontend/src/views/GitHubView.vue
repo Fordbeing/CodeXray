@@ -313,7 +313,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Location, Link, Clock, Loading, Platform, CircleClose, TrendCharts, CircleCheck, Refresh } from '@element-plus/icons-vue'
-import { getUserProfile, getUserRepos, getUserStarred, refreshGithubCache } from '../api/github'
+import { getUserProfile, getUserRepos, getUserStarred } from '../api/github'
 
 const user = ref(null)
 const ghInput = ref('')
@@ -440,6 +440,27 @@ const recentActiveRepos = computed(() => {
     .slice(0, 5)
 })
 
+const GH_CACHE_KEY = 'codexray_gh_cache'
+const GH_CACHE_TTL = 3600000 // 1 hour
+
+function saveGhCache(username, profile, repos) {
+  try {
+    localStorage.setItem(GH_CACHE_KEY, JSON.stringify({
+      username, profile, repos, time: Date.now()
+    }))
+  } catch { /* ignore */ }
+}
+
+function loadGhCache(username) {
+  try {
+    const raw = localStorage.getItem(GH_CACHE_KEY)
+    if (!raw) return null
+    const cache = JSON.parse(raw)
+    if (cache.username !== username) return null
+    return cache
+  } catch { return null }
+}
+
 async function loadGithub(username) {
   const name = username || ghInput.value.trim()
   if (!name) {
@@ -458,6 +479,7 @@ async function loadGithub(username) {
     ghRepos.value = repos
     cacheTime.value = new Date()
     localStorage.setItem('codexray_gh_user', name)
+    saveGhCache(name, profile, repos)
   } catch (e) {
     const msg = e?.message || ''
     if (msg.includes('404') || msg.includes('Not Found')) {
@@ -471,6 +493,17 @@ async function loadGithub(username) {
   } finally {
     ghLoading.value = false
   }
+}
+
+/** 从缓存加载，不发请求 */
+function loadFromCache(username) {
+  const cache = loadGhCache(username)
+  if (!cache) return false
+  ghUsername.value = username
+  ghProfile.value = cache.profile
+  ghRepos.value = cache.repos
+  cacheTime.value = new Date(cache.time)
+  return true
 }
 
 async function loadMoreRepos() {
@@ -500,7 +533,6 @@ async function handleRefreshGithub() {
   if (!ghUsername.value) return
   refreshing.value = true
   try {
-    await refreshGithubCache(ghUsername.value)
     await loadGithub(ghUsername.value)
     ElMessage.success('数据已刷新')
   } catch (e) {
@@ -524,6 +556,7 @@ function resetGithub() {
   ghInput.value = ''
   repoPerPage.value = 30
   localStorage.removeItem('codexray_gh_user')
+  localStorage.removeItem(GH_CACHE_KEY)
 }
 
 function loadUser() {
@@ -537,11 +570,10 @@ async function initFromUser() {
   const ghUser = user.value?.githubUsername || localStorage.getItem('codexray_gh_user')
   if (ghUser && !ghProfile.value) {
     ghInput.value = ghUser
-    try {
-      await loadGithub(ghUser)
-    } catch {
-      // loadGithub 已处理错误
-    }
+    // 优先从缓存加载，不发请求
+    if (loadFromCache(ghUser)) return
+    // 缓存不存在，显示输入框让用户点击"加载"
+    ghUsername.value = ''
   }
 }
 
@@ -556,6 +588,7 @@ function onAuthChange(e) {
     ghError.value = ''
     repoPerPage.value = 30
     localStorage.removeItem('codexray_gh_user')
+    localStorage.removeItem(GH_CACHE_KEY)
   } else {
     // 登录成功，加载新用户的 GitHub
     loadUser()
