@@ -89,8 +89,9 @@
         <div class="chat-messages" ref="messagesRef">
           <div v-if="messages.length === 0" class="empty-chat">
             <el-icon :size="48" color="#d0d7de"><ChatDotRound /></el-icon>
-            <p v-if="currentTaskId">已关联分析任务，可对该仓库代码进行精确问答</p>
-            <p v-else>输入仓库地址和问题，开始与代码对话</p>
+            <p v-if="!currentSessionId">请先在上方输入仓库地址，点击「新建对话」开始</p>
+            <p v-else-if="currentTaskId">已关联分析任务，可对该仓库代码进行精确问答</p>
+            <p v-else>输入问题，开始与代码对话</p>
           </div>
 
           <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role]">
@@ -128,12 +129,13 @@
         </div>
 
         <!-- 输入区 -->
-        <div class="chat-input">
+        <div class="chat-input" :class="{ 'input-locked': !currentSessionId }">
           <el-input
             v-model="question"
             type="textarea"
             :rows="2"
-            placeholder="输入你的问题... (Enter 发送)"
+            :placeholder="currentSessionId ? '输入你的问题... (Enter 发送)' : '请先新建对话'"
+            :disabled="!currentSessionId"
             resize="none"
             @keyup.enter.exact="handleSend"
           />
@@ -148,7 +150,7 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted, watch, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult } from '../api/chat'
 import { marked } from 'marked'
@@ -169,6 +171,7 @@ function renderMd(text) {
 }
 
 const route = useRoute()
+const router = useRouter()
 
 const repoUrl = ref('')
 const question = ref('')
@@ -186,7 +189,7 @@ const activePolls = new Map()
 // 持久化到 localStorage 的 key
 const STORAGE_KEY = 'codexray_chat_state'
 
-const canSend = computed(() => repoUrl.value.trim() && question.value.trim() && !hasPending.value)
+const canSend = computed(() => !!currentSessionId.value && question.value.trim() && !hasPending.value)
 const hasPending = computed(() => messages.value.some(m => m.pending || m.streaming))
 
 function onAuthChange(e) {
@@ -208,18 +211,28 @@ function onAuthChange(e) {
   }
 }
 
-onMounted(() => {
-  if (route.query.repoUrl) repoUrl.value = route.query.repoUrl
-  if (route.query.taskId) currentTaskId.value = route.query.taskId
+onMounted(async () => {
   if (window.innerWidth >= 768) sidebarOpen.value = true
+
+  const fromRepoUrl = route.query.repoUrl
+  const fromTaskId = route.query.taskId
+
+  if (fromRepoUrl) repoUrl.value = fromRepoUrl
+  if (fromTaskId) currentTaskId.value = fromTaskId
 
   restoreState()
 
-  // 始终加载会话列表（不限于有 repoUrl 时）
-  loadSessions()
+  // 先加载会话列表
+  await loadSessions()
+
+  // 从其他页面跳转过来（带 repoUrl），自动进入会话
+  if (fromRepoUrl) {
+    await autoEnterSession(fromRepoUrl, fromTaskId)
+    // 清除 query 参数，防止重复触发
+    router.replace({ path: route.path })
+  }
 
   window.addEventListener('auth-change', onAuthChange)
-
   nextTick(() => addCodeCopyButtons())
 })
 
@@ -231,11 +244,13 @@ onUnmounted(() => {
   window.removeEventListener('auth-change', onAuthChange)
 })
 
-watch(() => route.query, (q) => {
-  if (q.repoUrl && q.repoUrl !== repoUrl.value) repoUrl.value = q.repoUrl
-  if (q.taskId) currentTaskId.value = q.taskId
-  // 从其他页面带参数过来时，自动刷新会话列表（加载全部）
-  if (q.repoUrl || q.taskId) loadSessions()
+watch(() => route.query, async (q) => {
+  if (q.repoUrl) {
+    repoUrl.value = q.repoUrl
+    if (q.taskId) currentTaskId.value = q.taskId
+    await loadSessions()
+    await autoEnterSession(q.repoUrl, q.taskId)
+  }
 })
 
 // 状态持久化
@@ -376,6 +391,31 @@ async function switchSession(session) {
   } catch (e) {
     console.error('加载历史失败:', e)
     messages.value = []
+  }
+}
+
+/**
+ * 自动进入会话：查找该仓库的已有会话，没有则新建。
+ * 用于从分析页面跳转过来时自动进入对话。
+ */
+async function autoEnterSession(url, taskId) {
+  // 查找该仓库的最新会话
+  const existing = sessions.value.find(s => s.repoUrl === url)
+  if (existing) {
+    // 已有会话，直接进入
+    await switchSession(existing)
+    return
+  }
+
+  // 没有已有会话，创建新的
+  try {
+    const result = await createChatSession(url, taskId)
+    currentSessionId.value = result.sessionId
+    messages.value = []
+    await loadSessions()
+    saveState()
+  } catch (e) {
+    ElMessage.error('创建会话失败: ' + (e.message || '未知错误'))
   }
 }
 
@@ -838,6 +878,11 @@ function addCodeCopyButtons() {
 .chat-input {
   display: flex; gap: 12px; padding: 14px 20px;
   border-top: 1px solid #e8ecf0; flex-shrink: 0;
+}
+
+.chat-input.input-locked {
+  opacity: 0.6;
+  background: #f8faf9;
 }
 
 .chat-input :deep(.el-textarea) { flex: 1; }
