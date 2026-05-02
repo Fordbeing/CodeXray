@@ -7,6 +7,7 @@ import com.codexray.model.dto.RepoPreviewResponse;
 import com.codexray.service.AnalysisService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -23,6 +24,19 @@ public class AnalysisController {
     @PostMapping("/analyze")
     public Result<String> analyze(@Valid @RequestBody AnalyzeRequest request) {
         String taskId = analysisService.submitAnalysis(request.repoUrl());
+        return Result.ok(taskId);
+    }
+
+    @PostMapping("/upload")
+    public Result<String> upload(@RequestParam("file") MultipartFile file) {
+        if (file.isEmpty()) {
+            return Result.error("文件为空");
+        }
+        String originalName = file.getOriginalFilename();
+        if (originalName == null || (!originalName.endsWith(".zip") && !originalName.endsWith(".tar.gz") && !originalName.endsWith(".tgz"))) {
+            return Result.error("仅支持 .zip / .tar.gz 格式");
+        }
+        String taskId = analysisService.uploadAndAnalyze(file);
         return Result.ok(taskId);
     }
 

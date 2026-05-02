@@ -55,3 +55,8 @@ export async function getUserStarred(username, perPage = 10) {
     fork: r.fork
   }))
 }
+
+/** 刷新 GitHub 缓存 */
+export async function refreshGithubCache(username) {
+  return request.post(`/github/users/${username}/refresh`)
+}

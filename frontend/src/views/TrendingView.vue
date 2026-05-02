@@ -6,7 +6,7 @@
         <p class="page-subtitle">每日热门开源项目，AI 助你快速判断是否值得关注</p>
       </div>
       <div class="header-actions">
-        <el-radio-group v-model="lang" size="small" @change="reload">
+        <el-radio-group v-model="lang" size="default" @change="reload">
           <el-radio-button value="zh">中文</el-radio-button>
           <el-radio-button value="en">English</el-radio-button>
         </el-radio-group>
@@ -23,11 +23,12 @@
           <el-icon><Refresh /></el-icon>
           刷新数据
         </el-button>
-        <el-button plain @click="showSubscribe = true">
+        <el-button plain @click="handleSubscribeClick">
           <el-icon><Message /></el-icon>
           订阅日报
         </el-button>
-        <el-button text type="info" size="small" @click="showUnsubscribe = true">
+        <el-button plain size="default" @click="showUnsubscribe = true">
+          <el-icon><CloseBold /></el-icon>
           退订
         </el-button>
       </div>
@@ -72,6 +73,16 @@
               </div>
             </div>
             <p class="repo-desc" v-if="repo.description">{{ repo.description }}</p>
+            <div class="card-actions">
+              <el-button size="small" type="primary" plain @click="analyzeRepo(repo)">
+                <el-icon style="margin-right: 2px"><Search /></el-icon>
+                代码分析
+              </el-button>
+              <el-button size="small" @click="copyClone(repo)">
+                <el-icon style="margin-right: 2px"><CopyDocument /></el-icon>
+                Clone
+              </el-button>
+            </div>
             <div class="repo-analysis" v-if="repo.analysis">
               <div class="analysis-header">
                 <svg viewBox="0 0 16 16" width="14" height="14"><path fill="#2da44e" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
@@ -149,10 +160,16 @@
 
     <el-dialog v-model="showSubscribe" title="订阅每日热点日报" width="420px" class="subscribe-dialog">
       <p class="subscribe-hint">每日早 8 点自动推送 GitHub 热点项目到您的邮箱</p>
-      <el-form :model="subForm" label-position="top">
+      <div v-if="currentUser?.emailVerified" class="sub-email-info">
+        <el-icon :size="18" color="#2da44e"><CircleCheck /></el-icon>
+        <span>将发送至已绑定邮箱 <strong>{{ currentUser.email }}</strong></span>
+      </div>
+      <el-form v-else :model="subForm" label-position="top">
         <el-form-item label="邮箱地址">
           <el-input v-model="subForm.email" placeholder="your@email.com" size="large" />
         </el-form-item>
+      </el-form>
+      <el-form :model="subForm" label-position="top">
         <el-form-item label="邮件语言">
           <el-radio-group v-model="subForm.language" size="large">
             <el-radio-button value="zh">中文</el-radio-button>
@@ -174,13 +191,36 @@
         <el-button type="danger" :loading="unsubscribing" @click="handleUnsubscribe">确认退订</el-button>
       </template>
     </el-dialog>
+
+    <!-- 未绑定邮箱提示 -->
+    <el-dialog v-model="showEmailBindHint" title="绑定邮箱" width="400px">
+      <div class="bind-hint-content">
+        <el-icon :size="40" color="#3b82f6"><Message /></el-icon>
+        <p>订阅热点日报需要先绑定邮箱</p>
+        <p class="bind-hint-sub">绑定后系统将使用该邮箱接收每日推送</p>
+      </div>
+      <template #footer>
+        <el-button @click="showEmailBindHint = false">取消</el-button>
+        <el-button type="primary" @click="openEmailBind">去绑定</el-button>
+      </template>
+    </el-dialog>
+
+    <ProfileDialog v-model="showProfile" :user="currentUser" @success="onProfileSuccess" />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { Search, CloseBold, CopyDocument, CircleCheck, Message, Refresh } from '@element-plus/icons-vue'
 import { getTodayTrending, getTrendingByDate, refreshTrending, subscribeEmail, unsubscribeEmail } from '../api/trending'
+import { marked } from 'marked'
+import ProfileDialog from '../components/ProfileDialog.vue'
+
+const router = useRouter()
+
+marked.setOptions({ breaks: true, gfm: true, pedantic: false })
 
 const repos = ref([])
 const loading = ref(false)
@@ -195,6 +235,10 @@ const subForm = ref({ email: '', language: 'zh' })
 const showUnsubscribe = ref(false)
 const unsubscribing = ref(false)
 const unsubEmail = ref('')
+
+const currentUser = ref(null)
+const showEmailBindHint = ref(false)
+const showProfile = ref(false)
 
 const LANG_COLORS = {
   JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
@@ -248,11 +292,11 @@ const totalTodayStars = computed(() => {
 
 function formatAnalysis(text) {
   if (!text) return ''
-  return text
-    .replace(/\n/g, '<br>')
-    .replace(/【([^】]+)】/g, '<div class="analysis-section-title">$1</div>')
-    .replace(/\*\*([^*]+)\*\*/g, '<div class="analysis-section-title">$1</div>')
-    .replace(/^#+\s*(.+)$/gm, '<div class="analysis-section-title">$1</div>')
+  try {
+    return marked.parse(text)
+  } catch {
+    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+  }
 }
 
 async function loadToday() {
@@ -293,18 +337,32 @@ async function reload() {
   }
 }
 
-async function handleSubscribe() {
-  if (!subForm.value.email) {
-    ElMessage.warning('请输入邮箱地址')
+function handleSubscribeClick() {
+  if (!currentUser.value) {
+    ElMessage.warning('请先登录')
     return
   }
+  if (!currentUser.value.emailVerified) {
+    showEmailBindHint.value = true
+    return
+  }
+  showSubscribe.value = true
+}
+
+async function handleSubscribe() {
   subscribing.value = true
   try {
-    await subscribeEmail(subForm.value.email, subForm.value.language)
+    const email = currentUser.value?.emailVerified ? currentUser.value.email : subForm.value.email
+    if (!email) {
+      ElMessage.warning('请输入邮箱地址')
+      subscribing.value = false
+      return
+    }
+    await subscribeEmail(email, subForm.value.language)
     ElMessage.success('订阅成功！每日早 8 点将推送热点日报')
     showSubscribe.value = false
   } catch (e) {
-    ElMessage.error('订阅失败，请重试')
+    // handled by interceptor
   } finally {
     subscribing.value = false
   }
@@ -328,8 +386,48 @@ async function handleUnsubscribe() {
   }
 }
 
+function analyzeRepo(repo) {
+  router.push({ path: '/analyze', query: { url: repo.repoUrl } })
+}
+
+async function copyClone(repo) {
+  try {
+    await navigator.clipboard.writeText('git clone ' + repo.repoUrl)
+    ElMessage.success('Clone 命令已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+function loadUser() {
+  const raw = localStorage.getItem('codexray_user')
+  currentUser.value = raw ? JSON.parse(raw) : null
+}
+
+function onAuthChange() {
+  loadUser()
+}
+
+function openEmailBind() {
+  showEmailBindHint.value = false
+  showProfile.value = true
+}
+
+function onProfileSuccess(data) {
+  if (data) {
+    currentUser.value = data
+    localStorage.setItem('codexray_user', JSON.stringify(data))
+  }
+}
+
 onMounted(() => {
   loadToday()
+  loadUser()
+  window.addEventListener('auth-change', onAuthChange)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('auth-change', onAuthChange)
 })
 </script>
 
@@ -524,6 +622,12 @@ onMounted(() => {
   font-size: 13.5px;
   color: #656d76;
   line-height: 1.6;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 /* ===== Analysis Block ===== */
@@ -738,6 +842,43 @@ onMounted(() => {
   font-size: 13px;
   color: #656d76;
   margin: 0 0 16px;
+}
+
+.sub-email-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #166534;
+  margin-bottom: 12px;
+}
+
+.sub-email-info strong {
+  color: #1f2328;
+}
+
+.bind-hint-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 0 10px;
+  text-align: center;
+}
+
+.bind-hint-content p {
+  margin: 0;
+  font-size: 15px;
+  color: #1f2328;
+}
+
+.bind-hint-sub {
+  font-size: 13px !important;
+  color: #656d76 !important;
 }
 
 /* ===== 响应式 ===== */

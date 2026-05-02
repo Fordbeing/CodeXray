@@ -8,6 +8,8 @@ public record UserResponse(
         String nickname,
         String githubUsername,
         String avatarUrl,
+        String email,
+        Boolean emailVerified,
         String token
 ) {
     public static UserResponse from(User user, String token) {
@@ -17,6 +19,8 @@ public record UserResponse(
                 user.getNickname(),
                 user.getGithubUsername(),
                 user.getAvatarUrl(),
+                user.getEmail(),
+                user.getEmailVerified() != null && user.getEmailVerified(),
                 token
         );
     }

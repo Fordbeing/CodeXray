@@ -4,6 +4,15 @@ export function analyzeRepo(repoUrl) {
   return request.post('/analysis/analyze', { repoUrl })
 }
 
+export function uploadAndAnalyze(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post('/analysis/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000
+  })
+}
+
 export function getAnalysisResult(taskId) {
   return request.get(`/analysis/${taskId}`)
 }

@@ -93,11 +93,13 @@ public class IndexerAgent {
         });
 
         try {
+            String systemPrompt = "你是一个技术栈识别专家。根据项目配置文件准确识别技术栈和架构模式。" +
+                    "要求：列出具体的技术名称和版本（如果可见），不要遗漏关键技术。";
             String prompt = "根据以下项目配置文件，用一句话总结技术栈和架构模式。\n"
-                    + "例如：'Spring Boot 3 + MyBatis-Plus + MySQL, MVC 分层架构'\n"
+                    + "例如：'Spring Boot 3.3 + MyBatis-Plus + MySQL 8, MVC 分层架构'\n"
                     + "只输出总结，不要解释。\n\n"
                     + configContent;
-            return llmClient.chat("", prompt);
+            return llmClient.chat(systemPrompt, prompt);
         } catch (Exception e) {
             log.warn("Tech stack identification failed: {}", e.getMessage());
             return "Unknown";

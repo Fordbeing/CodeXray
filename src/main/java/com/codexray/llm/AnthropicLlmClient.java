@@ -1,6 +1,7 @@
 package com.codexray.llm;
 
 import com.codexray.service.CodeReaderService;
+import com.codexray.service.SettingService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -9,22 +10,28 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 @Service
 public class AnthropicLlmClient implements LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(AnthropicLlmClient.class);
 
-    private final WebClient webClient;
     private final CodeReaderService codeReaderService;
+    private final SettingService settingService;
     private final ObjectMapper objectMapper;
-    private final String model;
-    private final int maxTokens;
+
+    // 默认值来自 application.yml（仅 max_tokens 有默认值，其余必须在设置页配置）
+    private final int defaultMaxTokens;
+
+    // 缓存 WebClient，设置变更时重建
+    private WebClient cachedWebClient;
+    private String cachedBaseUrl;
+    private String cachedApiKey;
 
     private static final String SYSTEM_PROMPT = """
             你是一个专业的代码分析专家 CodeXray。根据提供的仓库代码内容，生成一份详细的分析报告。
@@ -70,27 +77,68 @@ public class AnthropicLlmClient implements LlmClient {
             """;
 
     public AnthropicLlmClient(
-            @Value("${codexray.llm.base-url}") String baseUrl,
-            @Value("${codexray.llm.api-key}") String apiKey,
-            @Value("${codexray.llm.model}") String model,
             @Value("${codexray.llm.max-tokens:8192}") int maxTokens,
             CodeReaderService codeReaderService,
+            SettingService settingService,
             ObjectMapper objectMapper) {
-        this.model = model;
-        this.maxTokens = maxTokens;
+        this.defaultMaxTokens = maxTokens;
         this.codeReaderService = codeReaderService;
+        this.settingService = settingService;
         this.objectMapper = objectMapper;
-        this.webClient = WebClient.builder()
-                .baseUrl(baseUrl)
-                .defaultHeader("x-api-key", apiKey)
-                .defaultHeader("anthropic-version", "2023-06-01")
-                .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
-                .build();
-        log.info("AnthropicLlmClient initialized: baseUrl={}, model={}, maxTokens={}", baseUrl, model, maxTokens);
+        log.info("AnthropicLlmClient initialized (settings-driven, maxTokens={})", maxTokens);
+    }
+
+    /** 检查 AI 设置是否已配置 */
+    private void checkConfigured() {
+        String baseUrl = settingService.get("ai_base_url");
+        String apiKey = settingService.get("ai_api_key");
+        String model = settingService.get("ai_model");
+        if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank() || model == null || model.isBlank()) {
+            throw new RuntimeException("AI 模型未配置，请先在「系统设置」页面填写 API Key、Base URL 和模型名称");
+        }
+    }
+
+    private String getBaseUrl() {
+        return settingService.get("ai_base_url");
+    }
+
+    private String getApiKey() {
+        return settingService.get("ai_api_key");
+    }
+
+    private String getModel() {
+        return settingService.get("ai_model");
+    }
+
+    private int getMaxTokens() {
+        String val = settingService.get("ai_max_tokens");
+        if (val != null && !val.isBlank()) {
+            try { return Integer.parseInt(val); } catch (NumberFormatException ignored) {}
+        }
+        return defaultMaxTokens;
+    }
+
+    /** 获取或重建 WebClient（配置变更时自动重建） */
+    private synchronized WebClient getWebClient() {
+        String baseUrl = getBaseUrl();
+        String apiKey = getApiKey();
+        if (cachedWebClient == null || !baseUrl.equals(cachedBaseUrl) || !apiKey.equals(cachedApiKey)) {
+            cachedWebClient = WebClient.builder()
+                    .baseUrl(baseUrl)
+                    .defaultHeader("x-api-key", apiKey)
+                    .defaultHeader("anthropic-version", "2023-06-01")
+                    .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                    .build();
+            cachedBaseUrl = baseUrl;
+            cachedApiKey = apiKey;
+            log.info("WebClient rebuilt: baseUrl={}, model={}", baseUrl, getModel());
+        }
+        return cachedWebClient;
     }
 
     @Override
     public String analyze(String repoPath) {
+        checkConfigured();
         log.info("Starting LLM analysis for repo: {}", repoPath);
         String codeContext = codeReaderService.readRepo(repoPath);
         log.debug("Code context size: {} chars", codeContext.length());
@@ -104,6 +152,7 @@ public class AnthropicLlmClient implements LlmClient {
 
     @Override
     public String chat(String repoPath, String question) {
+        checkConfigured();
         log.info("LLM chat for repo: {}, question length: {}", repoPath, question.length());
         String codeContext = codeReaderService.readRepo(repoPath);
 
@@ -115,48 +164,72 @@ public class AnthropicLlmClient implements LlmClient {
 
     @Override
     public String chatWithContext(String systemPrompt, List<Map<String, String>> history, String question) {
+        checkConfigured();
         log.info("LLM chatWithContext, history turns: {}, question length: {}", history.size(), question.length());
 
-        // 构建消息列表：历史 + 当前问题
-        List<Map<String, Object>> messages = new ArrayList<>();
-        for (Map<String, String> h : history) {
-            messages.add(Map.of("role", h.get("role"), "content", h.get("content")));
-        }
-        messages.add(Map.of("role", "user", "content", question));
-
+        List<Map<String, Object>> messages = buildMessages(history, question);
         return callMessagesApiMultiTurn(systemPrompt, messages);
     }
 
     @Override
+    public void chatWithContextStreaming(String systemPrompt, List<Map<String, String>> history,
+                                         String question, Consumer<String> onToken) {
+        checkConfigured();
+        log.info("LLM chatWithContextStreaming, history turns: {}, question length: {}", history.size(), question.length());
+
+        List<Map<String, Object>> messages = buildMessages(history, question);
+        callMessagesApiStream(systemPrompt, messages, onToken);
+    }
+
+    @Override
     public String analyzeTrendingRepo(String repoName, String description, String lang) {
+        checkConfigured();
         boolean isZh = !"en".equals(lang);
         String systemPrompt = isZh
                 ? """
                 你是一个资深技术分析专家，擅长快速评估开源项目的价值和适用性。
                 请对以下 GitHub 热门项目进行分析，帮助开发者在 30 秒内判断这个项目是否值得关注。
 
-                输出格式要求（每部分 2-3 句话，信息密度高，不讲废话）：
+                使用 Markdown 格式输出，每个标题用 ###，每部分 2-3 句话，信息密度高：
 
-                【项目定位】这个项目是什么？一句话核心定位 + 它要解决的核心痛点。
-                【技术架构】核心技术栈是什么？架构设计有何特点？用了哪些关键技术？
-                【适用场景】谁会用到它？适合什么场景？能替代什么现有方案？
-                【核心亮点】与其他方案相比，它的 2-3 个最突出优势是什么？
-                【上手难度】学习曲线如何？有没有快速入门路径？
+                ### 项目定位
+                （这个项目是什么？一句话核心定位 + 它要解决的核心痛点）
 
-                注意：严格按照以上 5 个标题输出，每个标题一行，内容紧随其后。不要输出多余的解释或寒暄。"""
+                ### 技术架构
+                （核心技术栈是什么？架构设计有何特点？用了哪些关键技术？）
+
+                ### 适用场景
+                （谁会用到它？适合什么场景？能替代什么现有方案？）
+
+                ### 核心亮点
+                （与其他方案相比，它的 2-3 个最突出优势是什么？）
+
+                ### 上手难度
+                （学习曲线如何？有没有快速入门路径？）
+
+                注意：严格按照以上 5 个标题输出，不要输出多余的解释或寒暄。"""
                 : """
                 You are a senior technology analyst skilled at quickly evaluating open-source project value and applicability.
                 Analyze the following GitHub trending project to help developers decide within 30 seconds whether it's worth attention.
 
-                Output format (2-3 sentences per section, high information density, no fluff):
+                Use Markdown format with ### headings, 2-3 sentences per section, high information density:
 
-                [Positioning] What is this project? One-sentence core positioning + the core pain point it solves.
-                [Architecture] What is the core tech stack? What's notable about the architecture? Key technologies used?
-                [Use Cases] Who uses it? What scenarios is it suited for? What existing solutions can it replace?
-                [Highlights] What are 2-3 most prominent advantages over alternatives?
-                [Learning Curve] How steep is the learning curve? Quick start path available?
+                ### Positioning
+                (What is this project? One-sentence core positioning + the core pain point it solves.)
 
-                Note: Output exactly with the 5 section titles above, content follows immediately after each title. No extra explanation.""";
+                ### Architecture
+                (What is the core tech stack? What's notable about the architecture? Key technologies used?)
+
+                ### Use Cases
+                (Who uses it? What scenarios is it suited for? What existing solutions can it replace?)
+
+                ### Highlights
+                (What are 2-3 most prominent advantages over alternatives?)
+
+                ### Learning Curve
+                (How steep is the learning curve? Quick start path available?)
+
+                Note: Output exactly with the 5 section titles above. No extra explanation.""";
 
         String userContent = "项目名称: " + repoName + "\n项目描述: " + (description != null ? description : "No description");
 
@@ -168,28 +241,41 @@ public class AnthropicLlmClient implements LlmClient {
         }
     }
 
-    /**
-     * 调用 Anthropic Messages API。
-     * 小米端点格式: POST {baseUrl}/v1/messages
-     */
+    @Override
+    public String testConnection() {
+        checkConfigured();
+        log.info("Testing AI connection: baseUrl={}, model={}", getBaseUrl(), getModel());
+        String response = callMessagesApi("You are a helpful assistant. Reply with only 'OK'.", "Say OK");
+        log.info("AI connection test succeeded, response: {}", response);
+        return response;
+    }
+
+    private List<Map<String, Object>> buildMessages(List<Map<String, String>> history, String question) {
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (Map<String, String> h : history) {
+            messages.add(Map.of("role", h.get("role"), "content", h.get("content")));
+        }
+        messages.add(Map.of("role", "user", "content", question));
+        return messages;
+    }
+
     private String callMessagesApi(String systemPrompt, String userContent) {
         return callMessagesApiMultiTurn(systemPrompt,
                 List.of(Map.of("role", "user", "content", userContent)));
     }
 
-    /**
-     * 多轮对话 Messages API。
-     */
     private String callMessagesApiMultiTurn(String systemPrompt, List<Map<String, Object>> messages) {
         Map<String, Object> requestBody = new java.util.HashMap<>();
-        requestBody.put("model", model);
-        requestBody.put("max_tokens", maxTokens);
+        requestBody.put("model", getModel());
+        requestBody.put("max_tokens", getMaxTokens());
         requestBody.put("system", systemPrompt);
         requestBody.put("messages", messages);
 
+        WebClient wc = getWebClient();
+
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
-                String responseBody = webClient.post()
+                String responseBody = wc.post()
                         .uri("/v1/messages")
                         .bodyValue(requestBody)
                         .retrieve()
@@ -215,10 +301,100 @@ public class AnthropicLlmClient implements LlmClient {
         throw new RuntimeException("Unreachable");
     }
 
-    /**
-     * 解析 Anthropic Messages API 响应。
-     * 响应格式: { "content": [{"type":"text","text":"..."}], ... }
-     */
+    private void callMessagesApiStream(String systemPrompt, List<Map<String, Object>> messages,
+                                        Consumer<String> onToken) {
+        Map<String, Object> requestBody = new java.util.HashMap<>();
+        requestBody.put("model", getModel());
+        requestBody.put("max_tokens", getMaxTokens());
+        requestBody.put("system", systemPrompt);
+        requestBody.put("messages", messages);
+        requestBody.put("stream", true);
+
+        WebClient wc = getWebClient();
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.atomic.AtomicReference<RuntimeException> streamError = new java.util.concurrent.atomic.AtomicReference<>();
+                StringBuilder fullContent = new StringBuilder();
+
+                wc.post()
+                        .uri("/v1/messages")
+                        .bodyValue(requestBody)
+                        .retrieve()
+                        .bodyToFlux(String.class)
+                        .timeout(Duration.ofSeconds(180))
+                        .subscribe(
+                                data -> {
+                                    try {
+                                        if (data == null || data.isBlank()) return;
+                                        String json = data.startsWith("data: ") ? data.substring(6) : data;
+                                        if ("[DONE]".equals(json.trim())) return;
+
+                                        JsonNode node = objectMapper.readTree(json);
+                                        String type = node.has("type") ? node.get("type").asText() : "";
+
+                                        if ("content_block_delta".equals(type)) {
+                                            JsonNode delta = node.get("delta");
+                                            if (delta != null) {
+                                                String text = delta.has("text") ? delta.get("text").asText() : "";
+                                                if (!text.isEmpty()) {
+                                                    fullContent.append(text);
+                                                    onToken.accept(text);
+                                                }
+                                            }
+                                        } else if ("message_delta".equals(type)) {
+                                            JsonNode delta = node.get("delta");
+                                            if (delta != null && delta.has("text")) {
+                                                String text = delta.get("text").asText();
+                                                if (!text.isEmpty()) {
+                                                    fullContent.append(text);
+                                                    onToken.accept(text);
+                                                }
+                                            }
+                                        }
+                                    } catch (Exception e) {
+                                        log.debug("Failed to parse SSE event: {}", e.getMessage());
+                                    }
+                                },
+                                error -> {
+                                    streamError.set(new RuntimeException("Stream error", error));
+                                    latch.countDown();
+                                },
+                                latch::countDown
+                        );
+
+                if (!latch.await(180, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new RuntimeException("Streaming timed out");
+                }
+                if (streamError.get() != null) {
+                    throw streamError.get();
+                }
+
+                if (fullContent.isEmpty()) {
+                    log.warn("Streaming returned no content, falling back to non-streaming");
+                    String result = callMessagesApiMultiTurn(systemPrompt, messages);
+                    onToken.accept(result);
+                }
+                return;
+            } catch (Exception e) {
+                log.warn("LLM stream call attempt {}/3 failed: {}", attempt, e.getMessage());
+                if (attempt == 3) {
+                    log.error("LLM stream call failed after 3 attempts, falling back to non-streaming", e);
+                    String result = callMessagesApiMultiTurn(systemPrompt, messages);
+                    onToken.accept(result);
+                    return;
+                }
+                try {
+                    Thread.sleep(2000L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during retry", ie);
+                }
+            }
+        }
+    }
+
     private String extractContent(String responseBody) {
         if (responseBody == null || responseBody.isBlank()) {
             throw new RuntimeException("LLM API returned empty response");
@@ -226,14 +402,12 @@ public class AnthropicLlmClient implements LlmClient {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
 
-            // 检查错误
             JsonNode error = root.get("error");
             if (error != null) {
                 String errorMsg = error.has("message") ? error.get("message").asText() : error.toString();
                 throw new RuntimeException("LLM API error: " + errorMsg);
             }
 
-            // Anthropic 格式: content[0].text
             JsonNode content = root.get("content");
             if (content != null && content.isArray() && !content.isEmpty()) {
                 JsonNode firstBlock = content.get(0);
@@ -243,7 +417,7 @@ public class AnthropicLlmClient implements LlmClient {
                 }
             }
 
-            // 兼容 OpenAI 格式: choices[0].message.content
+            // 兼容 OpenAI 格式
             JsonNode choices = root.get("choices");
             if (choices != null && choices.isArray() && !choices.isEmpty()) {
                 JsonNode message = choices.get(0).get("message");

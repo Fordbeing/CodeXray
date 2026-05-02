@@ -99,17 +99,30 @@
               <el-icon v-else :size="20" color="#2da44e"><Cpu /></el-icon>
             </div>
             <div class="message-content">
-              <div class="message-text markdown-body" v-html="renderMd(msg.content)"></div>
-            </div>
-          </div>
-
-          <div v-if="streaming" class="message assistant">
-            <div class="message-avatar">
-              <el-icon :size="20" color="#2da44e"><Cpu /></el-icon>
-            </div>
-            <div class="message-content">
-              <div class="message-text markdown-body" v-html="renderMd(streamContent)"></div>
-              <span class="stream-cursor"></span>
+              <!-- 等待中：还没有任何内容 -->
+              <div v-if="msg.pending && !msg.streaming" class="message-text markdown-body">
+                <span class="loading-dots">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="pending-text">AI 正在思考中...</span>
+              </div>
+              <!-- 流式输出中：有内容 + 光标 -->
+              <div v-else-if="msg.streaming" class="message-text markdown-body">
+                <div v-html="renderMd(msg.content)"></div>
+                <span class="stream-cursor"></span>
+              </div>
+              <!-- 错误 -->
+              <div v-else-if="msg.error" class="message-text markdown-body error-text">
+                {{ msg.content }}
+              </div>
+              <!-- 完成 -->
+              <div v-else class="message-text markdown-body" v-html="renderMd(msg.content)"></div>
+              <!-- 消息操作栏 -->
+              <div v-if="!msg.pending && !msg.streaming && !msg.error && msg.content" class="message-actions">
+                <button class="action-btn" @click="copyMessage(msg.content)" title="复制内容">
+                  <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path fill="currentColor" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -124,7 +137,7 @@
             resize="none"
             @keyup.enter.exact="handleSend"
           />
-          <el-button type="primary" :loading="streaming" :disabled="!canSend" @click="handleSend">
+          <el-button type="primary" :loading="hasPending" :disabled="!canSend" @click="handleSend">
             发送
           </el-button>
         </div>
@@ -137,10 +150,9 @@
 import { ref, computed, nextTick, onMounted, watch, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getChatHistory, listChatSessions, createChatSession, deleteChatSession } from '../api/chat'
+import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult } from '../api/chat'
 import { marked } from 'marked'
 
-// Configure marked for safe rendering
 marked.setOptions({
   breaks: true,
   gfm: true,
@@ -157,12 +169,9 @@ function renderMd(text) {
 }
 
 const route = useRoute()
-const token = localStorage.getItem('codexray_token') || ''
 
 const repoUrl = ref('')
 const question = ref('')
-const streaming = ref(false)
-const streamContent = ref('')
 const loadingSessions = ref(false)
 const messages = ref([])
 const messagesRef = ref(null)
@@ -171,19 +180,55 @@ const currentTaskId = ref(null)
 const sessions = ref([])
 const sidebarOpen = ref(false)
 
-let abortController = null
+// 活跃的轮询: pollId → { timer, messageIndex }
+const activePolls = new Map()
 
-const canSend = computed(() => repoUrl.value.trim() && question.value.trim() && !streaming.value)
+// 持久化到 localStorage 的 key
+const STORAGE_KEY = 'codexray_chat_state'
+
+const canSend = computed(() => repoUrl.value.trim() && question.value.trim() && !hasPending.value)
+const hasPending = computed(() => messages.value.some(m => m.pending || m.streaming))
+
+function onAuthChange(e) {
+  if (!e.detail) {
+    // 用户登出，清除所有对话状态
+    for (const [, poll] of activePolls) {
+      clearInterval(poll.timer)
+    }
+    activePolls.clear()
+    messages.value = []
+    sessions.value = []
+    currentSessionId.value = null
+    currentTaskId.value = null
+    repoUrl.value = ''
+    localStorage.removeItem(STORAGE_KEY)
+  } else {
+    // 用户登录，自动加载会话列表
+    loadSessions()
+  }
+}
 
 onMounted(() => {
   if (route.query.repoUrl) repoUrl.value = route.query.repoUrl
   if (route.query.taskId) currentTaskId.value = route.query.taskId
-  if (repoUrl.value) loadSessions()
   if (window.innerWidth >= 768) sidebarOpen.value = true
+
+  restoreState()
+
+  // 始终加载会话列表（不限于有 repoUrl 时）
+  loadSessions()
+
+  window.addEventListener('auth-change', onAuthChange)
+
+  nextTick(() => addCodeCopyButtons())
 })
 
 onUnmounted(() => {
-  if (abortController) abortController.abort()
+  saveState()
+  for (const [, poll] of activePolls) {
+    clearInterval(poll.timer)
+  }
+  window.removeEventListener('auth-change', onAuthChange)
 })
 
 watch(() => route.query, (q) => {
@@ -192,11 +237,100 @@ watch(() => route.query, (q) => {
   if (q.repoUrl) loadSessions()
 })
 
+// 状态持久化
+function saveState() {
+  const state = {
+    repoUrl: repoUrl.value,
+    currentSessionId: currentSessionId.value,
+    currentTaskId: currentTaskId.value,
+    messages: messages.value,
+    sessions: sessions.value,
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  } catch { /* ignore */ }
+}
+
+function restoreState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (!saved) return
+    const state = JSON.parse(saved)
+    if (state.repoUrl && !repoUrl.value) repoUrl.value = state.repoUrl
+    if (state.currentSessionId) currentSessionId.value = state.currentSessionId
+    if (state.currentTaskId && !currentTaskId.value) currentTaskId.value = state.currentTaskId
+    if (state.messages && state.messages.length > 0) {
+      messages.value = state.messages
+      resumePolls()
+    }
+    if (state.sessions) sessions.value = state.sessions
+  } catch { /* ignore */ }
+}
+
+function resumePolls() {
+  messages.value.forEach((msg, idx) => {
+    if ((msg.pending || msg.streaming) && msg.pollId) {
+      startPolling(msg.pollId, idx)
+    }
+  })
+}
+
+function startPolling(pollId, messageIndex) {
+  if (activePolls.has(pollId)) {
+    clearInterval(activePolls.get(pollId).timer)
+  }
+
+  const timer = setInterval(async () => {
+    try {
+      const result = await getChatResult(pollId)
+      if (!result) return
+
+      // 流式进行中：更新内容
+      if (result.streaming && !result.done) {
+        if (messages.value[messageIndex]) {
+          messages.value[messageIndex].content = result.content || ''
+          messages.value[messageIndex].streaming = true
+          messages.value[messageIndex].pending = false
+          scrollToBottom()
+        }
+        saveState()
+        return
+      }
+
+      // 完成
+      if (result.done) {
+        clearInterval(timer)
+        activePolls.delete(pollId)
+        if (result.error) {
+          messages.value[messageIndex] = {
+            role: 'assistant',
+            content: result.error,
+            error: true,
+          }
+        } else {
+          messages.value[messageIndex] = {
+            role: 'assistant',
+            content: result.content,
+          }
+        }
+        saveState()
+        scrollToBottom()
+        loadSessions()
+      }
+    } catch (e) {
+      console.error('轮询失败:', e)
+    }
+  }, 600)
+
+  activePolls.set(pollId, { timer, messageIndex })
+}
+
 async function loadSessions() {
-  if (!repoUrl.value.trim()) return
   loadingSessions.value = true
   try {
-    sessions.value = await listChatSessions(repoUrl.value) || []
+    const url = repoUrl.value.trim() || undefined
+    sessions.value = await listChatSessions(url) || []
+    saveState()
   } catch (e) {
     console.error('加载会话列表失败:', e)
   } finally {
@@ -205,6 +339,11 @@ async function loadSessions() {
 }
 
 async function switchSession(session) {
+  for (const [, poll] of activePolls) {
+    clearInterval(poll.timer)
+  }
+  activePolls.clear()
+
   currentSessionId.value = session.sessionId
   repoUrl.value = session.repoUrl || repoUrl.value
   currentTaskId.value = session.taskId || currentTaskId.value
@@ -212,6 +351,7 @@ async function switchSession(session) {
   try {
     const history = await getChatHistory(session.sessionId)
     messages.value = (history || []).map(h => ({ role: h.role, content: h.content }))
+    saveState()
     await scrollToBottom()
   } catch (e) {
     console.error('加载历史失败:', e)
@@ -229,6 +369,7 @@ async function handleNewSession() {
     currentSessionId.value = result.sessionId
     messages.value = []
     await loadSessions()
+    saveState()
     ElMessage.success('新会话已创建')
   } catch (e) {
     ElMessage.error('创建会话失败: ' + (e.message || '未知错误'))
@@ -248,6 +389,7 @@ async function handleDeleteSession(sessionId) {
       currentSessionId.value = null
       messages.value = []
     }
+    saveState()
     ElMessage.success('已删除')
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('删除失败: ' + (e.message || '未知错误'))
@@ -256,78 +398,37 @@ async function handleDeleteSession(sessionId) {
 
 async function handleSend() {
   if (!canSend.value) return
-  if (streaming.value) return
 
   const q = question.value.trim()
   messages.value.push({ role: 'user', content: q })
   question.value = ''
-  streaming.value = true
-  streamContent.value = ''
+
+  const pendingIndex = messages.value.length
+  messages.value.push({ role: 'assistant', content: '', pending: true, streaming: false })
   await scrollToBottom()
 
   try {
-    abortController = new AbortController()
-    const headers = { 'Content-Type': 'application/json' }
-    if (token) headers['Authorization'] = 'Bearer ' + token
+    const resp = await sendChatAsync(repoUrl.value, q, currentSessionId.value, currentTaskId.value)
+    const pollId = resp.pollId
 
-    const resp = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        sessionId: currentSessionId.value,
-        repoUrl: repoUrl.value,
-        taskId: currentTaskId.value,
-        question: q
-      }),
-      signal: abortController.signal
-    })
+    messages.value[pendingIndex].pollId = pollId
 
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}))
-      throw new Error(err.message || '请求失败')
-    }
-
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          const data = line.slice(5)
-          if (data === '[DONE]') continue
-          try {
-            const evt = JSON.parse(data)
-            if (evt.type === 'session') {
-              currentSessionId.value = evt.sessionId
-            } else if (evt.type === 'token') {
-              streamContent.value += evt.content
-              await scrollToBottom()
-            }
-          } catch { /* skip malformed lines */ }
-        }
+    if (!currentSessionId.value) {
+      await loadSessions()
+      if (sessions.value.length > 0 && !currentSessionId.value) {
+        currentSessionId.value = sessions.value[0].sessionId
       }
     }
 
-    if (streamContent.value) {
-      messages.value.push({ role: 'assistant', content: streamContent.value })
-    }
-    streamContent.value = ''
-    await loadSessions()
+    saveState()
+    startPolling(pollId, pendingIndex)
   } catch (e) {
-    if (e.name !== 'AbortError') {
-      messages.value.push({ role: 'assistant', content: '抱歉，发生了错误：' + (e.message || '未知错误') })
+    messages.value[pendingIndex] = {
+      role: 'assistant',
+      content: '发送失败：' + (e.message || '未知错误'),
+      error: true,
     }
-  } finally {
-    streaming.value = false
-    abortController = null
+    saveState()
     await scrollToBottom()
   }
 }
@@ -351,6 +452,61 @@ function formatTime(timeStr) {
 async function scrollToBottom() {
   await nextTick()
   if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+  addCodeCopyButtons()
+}
+
+async function copyMessage(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+
+async function copyCode(btn) {
+  const pre = btn.closest('pre')
+  if (!pre) return
+  const code = pre.querySelector('code')
+  const text = code ? code.textContent : pre.textContent
+  try {
+    await navigator.clipboard.writeText(text)
+    btn.classList.add('copied')
+    btn.textContent = '已复制'
+    setTimeout(() => {
+      btn.classList.remove('copied')
+      btn.textContent = '复制'
+    }, 2000)
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+
+function addCodeCopyButtons() {
+  if (!messagesRef.value) return
+  const pres = messagesRef.value.querySelectorAll('.message-text pre')
+  pres.forEach(pre => {
+    if (pre.querySelector('.code-copy-btn')) return
+    const wrapper = document.createElement('div')
+    wrapper.className = 'code-block-wrapper'
+    const btn = document.createElement('button')
+    btn.className = 'code-copy-btn'
+    btn.textContent = '复制'
+    btn.addEventListener('click', () => copyCode(btn))
+    const header = document.createElement('div')
+    header.className = 'code-block-header'
+    const lang = pre.querySelector('code')?.className?.match(/language-(\w+)/)?.[1]
+    if (lang) {
+      const langSpan = document.createElement('span')
+      langSpan.className = 'code-lang'
+      langSpan.textContent = lang
+      header.appendChild(langSpan)
+    }
+    header.appendChild(btn)
+    pre.parentNode.insertBefore(wrapper, pre)
+    wrapper.appendChild(header)
+    wrapper.appendChild(pre)
+  })
 }
 </script>
 
@@ -530,6 +686,124 @@ async function scrollToBottom() {
 
 .message.assistant .message-text {
   background: #f6f8fa; color: #1f2328; border-bottom-left-radius: 2px;
+}
+
+/* ===== 消息复制按钮 ===== */
+.message-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.message:hover .message-actions {
+  opacity: 1;
+}
+
+.message.user .message-actions {
+  justify-content: flex-end;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: #8b949e;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.action-btn:hover {
+  background: #e8ecf0;
+  color: #1f2328;
+}
+
+/* ===== 代码块复制按钮 ===== */
+.message-text :deep(.code-block-wrapper) {
+  position: relative;
+  margin: 8px 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.message-text :deep(.code-block-header) {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+}
+
+.message-text :deep(.code-lang) {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+}
+
+.message-text :deep(.code-copy-btn) {
+  font-size: 12px;
+  color: #8b949e;
+  background: transparent;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.message-text :deep(.code-copy-btn:hover) {
+  color: #e6edf3;
+  border-color: #8b949e;
+  background: #30363d;
+}
+
+.message-text :deep(.code-copy-btn.copied) {
+  color: #2da44e;
+  border-color: #2da44e;
+}
+
+.message-text :deep(.code-block-wrapper pre) {
+  margin: 0;
+  border-radius: 0;
+}
+
+.error-text {
+  color: #cf222e !important;
+  background: #fef2f2 !important;
+  border: 1px solid #fecaca !important;
+}
+
+/* Loading dots animation */
+.loading-dots {
+  display: inline-flex; gap: 4px; align-items: center;
+  margin-right: 8px; vertical-align: middle;
+}
+
+.loading-dots span {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #2da44e; opacity: 0.4;
+  animation: dot-pulse 1.4s infinite ease-in-out both;
+}
+
+.loading-dots span:nth-child(1) { animation-delay: 0s; }
+.loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes dot-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+.pending-text {
+  font-size: 13px; color: #8b949e; font-style: italic;
 }
 
 /* Stream cursor */

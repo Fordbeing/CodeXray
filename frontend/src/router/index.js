@@ -11,7 +11,8 @@ const routes = [
       { path: 'chat', name: 'chat', component: () => import('../views/ChatView.vue'), meta: { title: '代码问答' } },
       { path: 'trending', name: 'trending', component: () => import('../views/TrendingView.vue'), meta: { title: '热点推送' } },
       { path: 'history', name: 'history', component: () => import('../views/HistoryView.vue'), meta: { title: '分析历史' } },
-      { path: 'github', name: 'github', component: () => import('../views/GitHubView.vue'), meta: { title: '我的 GitHub' } }
+      { path: 'github', name: 'github', component: () => import('../views/GitHubView.vue'), meta: { title: '我的 GitHub' } },
+      { path: 'settings', name: 'settings', component: () => import('../views/SettingsView.vue'), meta: { title: '系统设置' } }
     ]
   }
 ]

@@ -19,3 +19,11 @@ export function updateProfile(data) {
 export function changePassword(oldPassword, newPassword) {
   return request.post('/auth/change-password', { oldPassword, newPassword })
 }
+
+export function sendVerificationCode(email) {
+  return request.post('/auth/send-verification-code', { email })
+}
+
+export function verifyEmail(email, code) {
+  return request.post('/auth/verify-email', { email, code })
+}

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,6 +32,7 @@ public class AnalysisPipeline {
     private final ReporterAgent reporterAgent;
     private final AnalysisTaskMapper taskMapper;
     private final MinioService minioService;
+    private final ExecutorService vtExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public AnalysisPipeline(ScannerAgent scannerAgent, IndexerAgent indexerAgent,
                             AnalyzerAgent analyzerAgent, ReporterAgent reporterAgent,
@@ -48,8 +50,7 @@ public class AnalysisPipeline {
      * Stage 1 (Scanning) 和 Stage 2 (Indexing) 通过虚拟线程并行执行。
      */
     public void execute(String taskId, Long dbId, String repoPath, String repoUrl) {
-        try (ExecutorService vtExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
-
+        try {
             // Stage 1 + 2 并行执行（虚拟线程）
             updateStatus(dbId, "SCANNING");
             Future<ScannerAgent.ScanResult> scanFuture = vtExecutor.submit(
@@ -64,9 +65,9 @@ public class AnalysisPipeline {
             IndexerAgent.ProjectProfile profile = indexFuture.get();
             log.info("Phase 2 done: techStack={}", profile.techStack());
 
-            // Stage 3: ANALYZING
+            // Stage 3: ANALYZING（虚拟线程并行分析各 category）
             updateStatus(dbId, "ANALYZING");
-            List<AnalyzerAgent.ModuleAnalysis> modules = analyzerAgent.analyze(taskId, repoPath);
+            List<AnalyzerAgent.ModuleAnalysis> modules = analyzerAgent.analyzeParallel(taskId, vtExecutor);
             log.info("Phase 3 done: {} modules analyzed", modules.size());
 
             // Stage 4 + MinIO 上传并行

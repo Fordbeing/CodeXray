@@ -13,6 +13,7 @@ public class AnalysisTask {
     private Long id;
     private String taskId;
     private String repoUrl;
+    private Long userId;
     private String status;
     private String report;
     private String errorMessage;
@@ -27,6 +28,9 @@ public class AnalysisTask {
 
     public String getRepoUrl() { return repoUrl; }
     public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }
+
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }

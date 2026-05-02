@@ -9,6 +9,7 @@ public class ChatHistory {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String sessionId;
+    private Long userId;
     private String repoUrl;
     private String role;
     private String content;
@@ -19,6 +20,9 @@ public class ChatHistory {
 
     public String getSessionId() { return sessionId; }
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
 
     public String getRepoUrl() { return repoUrl; }
     public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }

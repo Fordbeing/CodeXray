@@ -67,7 +67,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  HomeFilled, Search, ChatDotRound, TrendCharts, List, Platform
+  HomeFilled, Search, ChatDotRound, TrendCharts, List, Platform, Setting
 } from '@element-plus/icons-vue'
 import { getMe } from '../api/auth'
 import AuthDialog from '../components/AuthDialog.vue'
@@ -89,6 +89,7 @@ const menuItems = [
   { path: '/trending', label: '热点推送', icon: TrendCharts },
   { path: '/github', label: '我的 GitHub', icon: Platform },
   { path: '/history', label: '分析历史', icon: List },
+  { path: '/settings', label: '系统设置', icon: Setting },
 ]
 
 function isActive(path) {
@@ -117,9 +118,17 @@ function loadUser() {
 }
 
 function handleLogout() {
-  localStorage.removeItem('codexray_token')
-  localStorage.removeItem('codexray_user')
+  // 清除所有应用相关的 localStorage 数据
+  const keysToRemove = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && key.startsWith('codexray_')) {
+      keysToRemove.push(key)
+    }
+  }
+  keysToRemove.forEach(k => localStorage.removeItem(k))
   user.value = null
+  window.dispatchEvent(new CustomEvent('auth-change', { detail: null }))
   ElMessage.success('已退出登录')
 }
 
@@ -136,14 +145,20 @@ function onProfileUpdate(data) {
   window.dispatchEvent(new CustomEvent('auth-change', { detail: user.value }))
 }
 
+function onAuthRequired() {
+  showAuth.value = true
+}
+
 onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
+  window.addEventListener('auth-required', onAuthRequired)
   loadUser()
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
+  window.removeEventListener('auth-required', onAuthRequired)
 })
 </script>
 

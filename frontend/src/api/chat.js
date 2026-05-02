@@ -1,8 +1,18 @@
 import request from './request'
 
-/** 发送问答消息 */
+/** 发送问答消息（同步） */
 export function chatWithRepo(repoUrl, question, sessionId, taskId) {
   return request.post('/chat', { repoUrl, question, sessionId, taskId })
+}
+
+/** 发送问答消息（异步）— 返回 pollId */
+export function sendChatAsync(repoUrl, question, sessionId, taskId) {
+  return request.post('/chat/send', { repoUrl, question, sessionId, taskId })
+}
+
+/** 轮询异步结果 */
+export function getChatResult(pollId) {
+  return request.get(`/chat/result/${pollId}`)
 }
 
 /** 获取会话历史 */

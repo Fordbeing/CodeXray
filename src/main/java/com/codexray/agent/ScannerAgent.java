@@ -12,7 +12,9 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 扫描 Agent：遍历仓库文件，语义切片，生成 Embedding，存入 ES + MySQL。
@@ -44,7 +46,7 @@ public class ScannerAgent {
 
         if (rawChunks.isEmpty()) {
             log.warn("No chunks generated for repo: {}", repoPath);
-            return new ScanResult(0, 0);
+            return new ScanResult(0, 0, Map.of());
         }
 
         // 批量生成 Embedding
@@ -96,8 +98,21 @@ public class ScannerAgent {
         // 统计
         int fileCount = (int) rawChunks.stream().map(CodeChunker.Chunk::filePath).distinct().count();
         log.info("ScannerAgent: done. {} files → {} chunks", fileCount, rawChunks.size());
-        return new ScanResult(fileCount, rawChunks.size());
+
+        // 收集每个 category 的代表性代码片段（每个 category 最多 3 个 chunk）
+        Map<String, List<String>> samplesByCategory = new LinkedHashMap<>();
+        for (CodeChunker.Chunk chunk : rawChunks) {
+            String cat = chunk.category() != null ? chunk.category() : "source";
+            samplesByCategory.computeIfAbsent(cat, k -> new ArrayList<>());
+            if (samplesByCategory.get(cat).size() < 3) {
+                samplesByCategory.get(cat).add(
+                        chunk.filePath() + ":" + chunk.startLine() + "-" + chunk.endLine()
+                                + "\n```\n" + chunk.content() + "\n```");
+            }
+        }
+
+        return new ScanResult(fileCount, rawChunks.size(), samplesByCategory);
     }
 
-    public record ScanResult(int fileCount, int chunkCount) {}
+    public record ScanResult(int fileCount, int chunkCount, Map<String, List<String>> codeSamples) {}
 }

@@ -1,20 +1,25 @@
 services:
+  # ========== MySQL ==========
   mysql:
     image: mysql:8.0
     container_name: codexray-mysql
     environment:
       MYSQL_ROOT_PASSWORD: codexray123
       MYSQL_DATABASE: codexray
-      MYSQL_CHARSET: utf8mb4
-      MYSQL_COLLATION: utf8mb4_unicode_ci
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./src/main/resources/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./src/main/resources/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pcodexray123"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
+  # ========== Redis ==========
   redis:
     image: redis:7-alpine
     container_name: codexray-redis
@@ -23,21 +28,33 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
+  # ========== Elasticsearch ==========
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
     container_name: codexray-es
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
     ports:
       - "9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
+  # ========== MinIO ==========
   minio:
     image: minio/minio:latest
     container_name: codexray-minio
@@ -46,10 +63,53 @@ services:
       MINIO_ROOT_PASSWORD: codexray123
     ports:
       - "9000:9000"
-      - "9001:9001"
     volumes:
       - minio_data:/data
-    command: server /data --console-address ":9001"
+    command: server /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ========== Backend ==========
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codexray-backend
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_SQL_INIT_MODE: "never"
+      MYSQL_HOST: codexray-mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: codexray123
+      REDIS_HOST: codexray-redis
+      CODEXRAY_ELASTICSEARCH_HOST: codexray-es
+      CODEXRAY_MINIO_ENDPOINT: http://codexray-minio:9000
+      CODEXRAY_CLONE_BASE_DIR: /data/codexray-clones
+    volumes:
+      - clone_data:/data/codexray-clones
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ========== Frontend ==========
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: codexray-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:
@@ -57,3 +117,4 @@ volumes:
   redis_data:
   es_data:
   minio_data:
+  clone_data:

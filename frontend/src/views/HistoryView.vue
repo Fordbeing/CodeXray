@@ -120,7 +120,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listTasks, deleteTask } from '../api/analysis'
 import { getStatusInfo, formatTime, shortenUrl } from '../utils/status'
@@ -197,8 +197,21 @@ async function handleDelete(taskId) {
   await loadTasks()
 }
 
+function onAuthChange(e) {
+  if (!e.detail) {
+    allTasks.value = []
+  } else {
+    loadTasks()
+  }
+}
+
 onMounted(() => {
   loadTasks()
+  window.addEventListener('auth-change', onAuthChange)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('auth-change', onAuthChange)
 })
 </script>
 

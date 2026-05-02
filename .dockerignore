@@ -1,0 +1,27 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend (has its own Dockerfile)
+frontend/node_modules
+frontend/dist
+
+# Docker (avoid recursive copy)
+docker-compose*.yml
+**/Dockerfile
+
+# Docs
+*.md
+LICENSE
+
+# Temp
+/tmp

@@ -9,28 +9,108 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Properties;
 
 @Service
 public class EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(EmailService.class);
 
-    private final JavaMailSender mailSender;
     private final EmailSubscriberMapper subscriberMapper;
+    private final SettingService settingService;
 
-    @Value("${spring.mail.username:noreply@codexray.com}")
-    private String fromEmail;
+    // 默认值来自 application.yml
+    private final String defaultFromEmail;
+    private final boolean defaultMailEnabled;
+    private final String defaultMailHost;
+    private final int defaultMailPort;
+    private final String defaultMailPassword;
 
-    @Value("${codexray.mail.enabled:false}")
-    private boolean mailEnabled;
+    // 可重建的 mailSender
+    private JavaMailSender mailSender;
+    private String mailSenderHost;
+    private int mailSenderPort;
+    private String mailSenderUsername;
+    private String mailSenderPassword;
 
-    public EmailService(JavaMailSender mailSender, EmailSubscriberMapper subscriberMapper) {
+    public EmailService(JavaMailSender mailSender,
+                        EmailSubscriberMapper subscriberMapper,
+                        SettingService settingService,
+                        @Value("${spring.mail.username:}") String defaultFromEmail,
+                        @Value("${codexray.mail.enabled:false}") boolean defaultMailEnabled,
+                        @Value("${spring.mail.host:smtp.163.com}") String defaultMailHost,
+                        @Value("${spring.mail.port:465}") int defaultMailPort,
+                        @Value("${spring.mail.password:}") String defaultMailPassword) {
         this.mailSender = mailSender;
         this.subscriberMapper = subscriberMapper;
+        this.settingService = settingService;
+        this.defaultFromEmail = defaultFromEmail;
+        this.defaultMailEnabled = defaultMailEnabled;
+        this.defaultMailHost = defaultMailHost;
+        this.defaultMailPort = defaultMailPort;
+        this.defaultMailPassword = defaultMailPassword;
+    }
+
+    private boolean isMailEnabled() {
+        String val = settingService.get("mail_enabled");
+        if (val != null) return "true".equalsIgnoreCase(val);
+        return defaultMailEnabled;
+    }
+
+    private String getFromEmail() {
+        String val = settingService.get("mail_username");
+        return (val != null && !val.isBlank()) ? val : defaultFromEmail;
+    }
+
+    private synchronized JavaMailSender getMailSender() {
+        String host = settingService.get("mail_host");
+        host = (host != null && !host.isBlank()) ? host : defaultMailHost;
+        String portStr = settingService.get("mail_port");
+        int port = defaultMailPort;
+        if (portStr != null && !portStr.isBlank()) {
+            try { port = Integer.parseInt(portStr); } catch (NumberFormatException ignored) {}
+        }
+        String username = settingService.get("mail_username");
+        username = (username != null && !username.isBlank()) ? username : defaultFromEmail;
+        String password = settingService.get("mail_password");
+        password = (password != null && !password.isBlank()) ? password : defaultMailPassword;
+
+        // 如果配置没变，复用现有实例
+        if (mailSender != null
+                && host.equals(mailSenderHost)
+                && port == mailSenderPort
+                && username.equals(mailSenderUsername)
+                && password.equals(mailSenderPassword)) {
+            return mailSender;
+        }
+
+        // 重建 JavaMailSender
+        JavaMailSenderImpl impl = new JavaMailSenderImpl();
+        impl.setHost(host);
+        impl.setPort(port);
+        impl.setUsername(username);
+        impl.setPassword(password);
+
+        Properties props = impl.getJavaMailProperties();
+        props.put("mail.smtp.auth", "true");
+        if (port == 465) {
+            props.put("mail.smtp.ssl.enable", "true");
+        } else {
+            props.put("mail.smtp.starttls.enable", "true");
+        }
+
+        this.mailSender = impl;
+        this.mailSenderHost = host;
+        this.mailSenderPort = port;
+        this.mailSenderUsername = username;
+        this.mailSenderPassword = password;
+        log.info("JavaMailSender rebuilt: host={}, port={}, username={}", host, port, username);
+        return mailSender;
     }
 
     /**
@@ -58,7 +138,7 @@ public class EmailService {
      * 发送 GitHub Trending 日报邮件。
      */
     public void sendTrendingDigest(String toEmail, List<TrendingRepoResponse> repos, boolean isZh) {
-        if (!mailEnabled) {
+        if (!isMailEnabled()) {
             log.debug("Mail disabled, skipping trending digest to {}", toEmail);
             return;
         }
@@ -98,13 +178,13 @@ public class EmailService {
         body.append("\n--- Powered by CodeXray ---");
 
         SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(fromEmail);
+        message.setFrom(getFromEmail());
         message.setTo(toEmail);
         message.setSubject(isZh
                 ? "CodeXray 每日热点 - " + java.time.LocalDate.now()
                 : "CodeXray Trending - " + java.time.LocalDate.now());
         message.setText(body.toString());
-        mailSender.send(message);
+        getMailSender().send(message);
         log.info("Trending digest sent to {}", toEmail);
     }
 

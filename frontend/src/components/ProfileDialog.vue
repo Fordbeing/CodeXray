@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     title="个人设置"
-    width="440px"
+    width="460px"
     class="profile-dialog"
   >
     <el-tabs v-model="activeTab">
@@ -29,6 +29,47 @@
           <el-button @click="visible = false">取消</el-button>
           <el-button type="primary" :loading="loading" @click="handleSave">保存</el-button>
         </div>
+      </el-tab-pane>
+
+      <!-- 邮箱绑定 -->
+      <el-tab-pane label="邮箱绑定" name="email">
+        <div v-if="user?.emailVerified" class="email-bound">
+          <el-icon :size="40" color="#2da44e"><CircleCheck /></el-icon>
+          <div class="email-bound-info">
+            <div class="email-bound-title">邮箱已绑定</div>
+            <div class="email-bound-addr">{{ user.email }}</div>
+          </div>
+          <el-button text type="primary" @click="resetEmail">更换邮箱</el-button>
+        </div>
+        <template v-else>
+          <div class="email-hint-box">
+            <el-icon :size="18" color="#3b82f6"><InfoFilled /></el-icon>
+            <span>绑定邮箱后可订阅每日热点日报推送</span>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="邮箱地址">
+              <el-input v-model="emailForm.email" placeholder="your@email.com" size="large" :disabled="emailForm.codeSent" />
+            </el-form-item>
+            <el-form-item v-if="emailForm.codeSent" label="验证码">
+              <div class="code-row">
+                <el-input v-model="emailForm.code" placeholder="6 位验证码" size="large" maxlength="6" />
+                <el-button size="large" :disabled="emailForm.countdown > 0" @click="handleSendCode">
+                  {{ emailForm.countdown > 0 ? emailForm.countdown + 's' : '重新发送' }}
+                </el-button>
+              </div>
+              <div class="form-hint">验证码已发送至 {{ emailForm.email }}，5 分钟内有效</div>
+            </el-form-item>
+          </el-form>
+          <div class="tab-footer">
+            <el-button @click="visible = false">取消</el-button>
+            <el-button v-if="!emailForm.codeSent" type="primary" :loading="emailForm.sending" @click="handleSendCode">
+              发送验证码
+            </el-button>
+            <el-button v-else type="primary" :loading="emailForm.verifying" @click="handleVerifyEmail">
+              确认绑定
+            </el-button>
+          </div>
+        </template>
       </el-tab-pane>
 
       <!-- 修改密码 -->
@@ -63,8 +104,8 @@
 <script setup>
 import { ref, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Lock } from '@element-plus/icons-vue'
-import { updateProfile, changePassword } from '../api/auth'
+import { Lock, CircleCheck, InfoFilled } from '@element-plus/icons-vue'
+import { updateProfile, changePassword, sendVerificationCode, verifyEmail } from '../api/auth'
 
 const visible = defineModel({ type: Boolean })
 const props = defineProps({ user: Object })
@@ -79,11 +120,22 @@ const form = reactive({
   githubUsername: ''
 })
 
+const emailForm = reactive({
+  email: '',
+  code: '',
+  codeSent: false,
+  sending: false,
+  verifying: false,
+  countdown: 0
+})
+
 const pwdForm = reactive({
   oldPassword: '',
   newPassword: '',
   confirmPassword: ''
 })
+
+let countdownTimer = null
 
 watch(visible, (v) => {
   if (v && props.user) {
@@ -93,8 +145,26 @@ watch(visible, (v) => {
     pwdForm.oldPassword = ''
     pwdForm.newPassword = ''
     pwdForm.confirmPassword = ''
+    resetEmailForm()
   }
 })
+
+function resetEmailForm() {
+  emailForm.email = ''
+  emailForm.code = ''
+  emailForm.codeSent = false
+  emailForm.sending = false
+  emailForm.verifying = false
+  emailForm.countdown = 0
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+}
+
+function resetEmail() {
+  resetEmailForm()
+}
 
 async function handleSave() {
   loading.value = true
@@ -110,6 +180,48 @@ async function handleSave() {
     // handled by interceptor
   } finally {
     loading.value = false
+  }
+}
+
+async function handleSendCode() {
+  if (!emailForm.email) {
+    ElMessage.warning('请输入邮箱地址')
+    return
+  }
+  emailForm.sending = true
+  try {
+    await sendVerificationCode(emailForm.email)
+    emailForm.codeSent = true
+    emailForm.countdown = 60
+    countdownTimer = setInterval(() => {
+      emailForm.countdown--
+      if (emailForm.countdown <= 0) {
+        clearInterval(countdownTimer)
+        countdownTimer = null
+      }
+    }, 1000)
+    ElMessage.success('验证码已发送')
+  } catch (e) {
+    // handled by interceptor
+  } finally {
+    emailForm.sending = false
+  }
+}
+
+async function handleVerifyEmail() {
+  if (!emailForm.code) {
+    ElMessage.warning('请输入验证码')
+    return
+  }
+  emailForm.verifying = true
+  try {
+    const data = await verifyEmail(emailForm.email, emailForm.code)
+    emit('success', data)
+    ElMessage.success('邮箱绑定成功')
+  } catch (e) {
+    // handled by interceptor
+  } finally {
+    emailForm.verifying = false
   }
 }
 
@@ -151,5 +263,51 @@ async function handleChangePassword() {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 8px;
+}
+
+.email-hint-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1e40af;
+  margin-bottom: 16px;
+}
+
+.email-bound {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 0;
+}
+
+.email-bound-info {
+  flex: 1;
+}
+
+.email-bound-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.email-bound-addr {
+  font-size: 13px;
+  color: #656d76;
+  margin-top: 2px;
+}
+
+.code-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.code-row :deep(.el-input) {
+  flex: 1;
 }
 </style>

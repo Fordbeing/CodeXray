@@ -2,25 +2,37 @@ package com.codexray.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.codexray.agent.AnalysisPipeline;
+import com.codexray.common.CurrentUser;
 import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.dto.AnalysisResultResponse;
 import com.codexray.model.dto.RepoPreviewResponse;
 import com.codexray.model.entity.AnalysisTask;
 import com.codexray.rag.VectorStoreService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.*;
+import java.nio.file.*;
+import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Service
 public class AnalysisService {
 
     private static final Logger log = LoggerFactory.getLogger(AnalysisService.class);
+
+    private static final Duration CACHE_TTL = Duration.ofDays(1);
+    private static final String PREVIEW_KEY_PREFIX = "codexray:preview:";
+    private static final String RESULT_KEY_PREFIX = "codexray:result:";
 
     private final AnalysisTaskMapper taskMapper;
     private final GitCloneService gitCloneService;
@@ -28,25 +40,28 @@ public class AnalysisService {
     private final AnalysisPipeline analysisPipeline;
     private final VectorStoreService vectorStoreService;
     private final MinioService minioService;
-
-    // 预览缓存: repoUrl → preview result
-    private final ConcurrentHashMap<String, RepoPreviewResponse> previewCache = new ConcurrentHashMap<>();
+    private final RedisTemplate<String, String> redisTemplate;
+    private final ObjectMapper objectMapper;
 
     public AnalysisService(AnalysisTaskMapper taskMapper, GitCloneService gitCloneService,
                            CodeReaderService codeReaderService, AnalysisPipeline analysisPipeline,
-                           VectorStoreService vectorStoreService, MinioService minioService) {
+                           VectorStoreService vectorStoreService, MinioService minioService,
+                           RedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper) {
         this.taskMapper = taskMapper;
         this.gitCloneService = gitCloneService;
         this.codeReaderService = codeReaderService;
         this.analysisPipeline = analysisPipeline;
         this.vectorStoreService = vectorStoreService;
         this.minioService = minioService;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public String submitAnalysis(String repoUrl) {
         AnalysisTask task = new AnalysisTask();
         task.setTaskId(UUID.randomUUID().toString());
         task.setRepoUrl(repoUrl);
+        task.setUserId(CurrentUser.get());
         task.setStatus("PENDING");
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -57,7 +72,113 @@ public class AnalysisService {
         return task.getTaskId();
     }
 
+    public String uploadAndAnalyze(MultipartFile file) {
+        String taskId = UUID.randomUUID().toString();
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("codexray-upload-");
+            String originalName = file.getOriginalFilename();
+            Path targetFile = tempDir.resolve(originalName != null ? originalName : "upload.zip");
+            file.transferTo(targetFile);
+
+            // 解压
+            Path extractDir = tempDir.resolve("extracted");
+            Files.createDirectories(extractDir);
+            if (originalName != null && originalName.endsWith(".zip")) {
+                unzip(targetFile, extractDir);
+            } else {
+                // tar.gz - 简单解压处理
+                untargz(targetFile, extractDir);
+            }
+
+            // 如果解压后只有一个顶层目录，使用它作为仓库路径
+            String repoPath = extractDir.toString();
+            try (var stream = Files.list(extractDir)) {
+                var entries = stream.toList();
+                if (entries.size() == 1 && Files.isDirectory(entries.get(0))) {
+                    repoPath = entries.get(0).toString();
+                }
+            }
+
+            // 创建任务
+            AnalysisTask task = new AnalysisTask();
+            task.setTaskId(taskId);
+            task.setRepoUrl("upload:" + (originalName != null ? originalName : "archive"));
+            task.setUserId(CurrentUser.get());
+            task.setStatus("PENDING");
+            task.setCreatedAt(LocalDateTime.now());
+            task.setUpdatedAt(LocalDateTime.now());
+            taskMapper.insert(task);
+
+            // 启动异步分析（传递最终路径，由 pipeline 负责清理）
+            asyncAnalyzeUploaded(task.getId(), taskId, repoPath, tempDir.toString());
+
+            return taskId;
+        } catch (Exception e) {
+            log.error("Upload analysis failed", e);
+            if (tempDir != null) cleanupDir(tempDir);
+            throw new RuntimeException("上传分析失败: " + e.getMessage(), e);
+        }
+    }
+
     @Async("analysisExecutor")
+    public void asyncAnalyzeUploaded(Long id, String taskId, String repoPath, String tempBaseDir) {
+        try {
+            updateStatus(id, "ANALYZING");
+            analysisPipeline.execute(taskId, id, repoPath, "upload:" + taskId);
+        } catch (Exception e) {
+            log.error("Upload analysis failed for task: {}", taskId, e);
+            AnalysisTask task = new AnalysisTask();
+            task.setId(id);
+            task.setStatus("FAILED");
+            task.setErrorMessage(e.getMessage());
+            task.setUpdatedAt(LocalDateTime.now());
+            taskMapper.updateById(task);
+        } finally {
+            cleanupDir(Path.of(tempBaseDir));
+        }
+    }
+
+    private void unzip(Path zipFile, Path destDir) throws IOException {
+        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile.toFile()))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                Path entryPath = destDir.resolve(entry.getName()).normalize();
+                if (!entryPath.startsWith(destDir)) {
+                    throw new IOException("Invalid zip entry: " + entry.getName());
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(entryPath);
+                } else {
+                    Files.createDirectories(entryPath.getParent());
+                    Files.copy(zis, entryPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+                zis.closeEntry();
+            }
+        }
+    }
+
+    private void untargz(Path targzFile, Path destDir) throws IOException {
+        ProcessBuilder pb = new ProcessBuilder("tar", "xzf", targzFile.toString(), "-C", destDir.toString());
+        try {
+            Process p = pb.start();
+            int code = p.waitFor();
+            if (code != 0) throw new IOException("tar extraction failed with code " + code);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("tar extraction interrupted", e);
+        }
+    }
+
+    private void cleanupDir(Path dir) {
+        try {
+            if (Files.exists(dir)) {
+                Files.walk(dir)
+                        .sorted(Comparator.reverseOrder())
+                        .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
+            }
+        } catch (IOException ignored) {}
+    }
     public void asyncAnalyze(Long id, String taskId, String repoUrl) {
         String localPath = null;
         try {
@@ -82,13 +203,25 @@ public class AnalysisService {
     }
 
     public AnalysisResultResponse getResult(String taskId) {
+        // 尝试从 Redis 缓存读取
+        String cacheKey = RESULT_KEY_PREFIX + taskId;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                Map<String, Object> map = objectMapper.readValue(cached, new TypeReference<>() {});
+                return objectMapper.convertValue(map, AnalysisResultResponse.class);
+            }
+        } catch (Exception e) {
+            log.warn("Redis read failed for result cache: {}", e.getMessage());
+        }
+
         AnalysisTask task = taskMapper.selectOne(
                 new QueryWrapper<AnalysisTask>().eq("task_id", taskId)
         );
         if (task == null) {
             throw new RuntimeException("Task not found: " + taskId);
         }
-        return new AnalysisResultResponse(
+        AnalysisResultResponse result = new AnalysisResultResponse(
                 task.getTaskId(),
                 task.getRepoUrl(),
                 task.getStatus(),
@@ -97,11 +230,27 @@ public class AnalysisService {
                 task.getCreatedAt(),
                 task.getUpdatedAt()
         );
+
+        // 只缓存已完成或失败的结果
+        if ("COMPLETED".equals(task.getStatus()) || "FAILED".equals(task.getStatus())) {
+            try {
+                String json = objectMapper.writeValueAsString(result);
+                redisTemplate.opsForValue().set(cacheKey, json, CACHE_TTL);
+            } catch (Exception e) {
+                log.warn("Redis write failed for result cache: {}", e.getMessage());
+            }
+        }
+
+        return result;
     }
 
     public List<AnalysisResultResponse> listTasks(int limit) {
-        QueryWrapper<AnalysisTask> wrapper = new QueryWrapper<AnalysisTask>()
-                .orderByDesc("created_at")
+        Long userId = CurrentUser.get();
+        QueryWrapper<AnalysisTask> wrapper = new QueryWrapper<AnalysisTask>();
+        if (userId != null) {
+            wrapper.eq("user_id", userId);
+        }
+        wrapper.orderByDesc("created_at")
                 .last("LIMIT " + Math.min(limit, 100));
         return taskMapper.selectList(wrapper).stream()
                 .map(t -> new AnalysisResultResponse(
@@ -112,6 +261,11 @@ public class AnalysisService {
     }
 
     public boolean deleteTask(String taskId) {
+        // 0. 清除 Redis 缓存
+        try {
+            redisTemplate.delete(RESULT_KEY_PREFIX + taskId);
+        } catch (Exception ignored) {}
+
         // 1. 删除 Elasticsearch 向量索引
         try {
             vectorStoreService.deleteByTaskId(taskId);
@@ -138,18 +292,32 @@ public class AnalysisService {
     }
 
     public RepoPreviewResponse previewRepo(String repoUrl) {
-        // 命中缓存直接返回
-        RepoPreviewResponse cached = previewCache.get(repoUrl);
-        if (cached != null) {
-            log.debug("Preview cache hit for: {}", repoUrl);
-            return cached;
+        // 尝试从 Redis 缓存读取
+        String cacheKey = PREVIEW_KEY_PREFIX + repoUrl;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                log.debug("Preview cache hit for: {}", repoUrl);
+                Map<String, Object> map = objectMapper.readValue(cached, new TypeReference<>() {});
+                return objectMapper.convertValue(map, RepoPreviewResponse.class);
+            }
+        } catch (Exception e) {
+            log.warn("Redis read failed for preview cache: {}", e.getMessage());
         }
 
         String localPath = null;
         try {
             localPath = gitCloneService.clone(repoUrl);
             RepoPreviewResponse preview = codeReaderService.preview(repoUrl, localPath);
-            previewCache.put(repoUrl, preview);
+
+            // 写入 Redis 缓存
+            try {
+                String json = objectMapper.writeValueAsString(preview);
+                redisTemplate.opsForValue().set(cacheKey, json, CACHE_TTL);
+            } catch (Exception e) {
+                log.warn("Redis write failed for preview cache: {}", e.getMessage());
+            }
+
             return preview;
         } catch (Exception e) {
             log.error("Preview failed for repo: {}", repoUrl, e);

@@ -9,13 +9,16 @@
         <div v-if="ghProfile" class="gh-user-tag">
           <img :src="ghProfile.avatar" class="tag-avatar" alt="" />
           <span>{{ ghProfile.login }}</span>
+          <el-button text size="small" @click="handleRefreshGithub" :loading="refreshing">
+            <el-icon style="margin-right: 2px"><Refresh /></el-icon>刷新
+          </el-button>
           <el-button text size="small" @click="resetGithub">更换</el-button>
         </div>
       </div>
     </div>
 
     <!-- 未输入用户名 -->
-    <div v-if="!ghUsername && !ghLoading" class="setup-card">
+    <div v-if="!ghUsername && !ghLoading && !ghError" class="setup-card">
       <el-icon :size="48" color="#d0d7de"><Platform /></el-icon>
       <h2 class="setup-title">连接你的 GitHub</h2>
       <p class="setup-hint">输入 GitHub 用户名，查看仓库概览、收藏项目和语言统计</p>
@@ -28,6 +31,21 @@
         <el-button type="primary" size="large" :loading="ghLoading" @click="loadGithub">加载</el-button>
       </div>
       <p v-if="!user" class="setup-login-hint">登录后可自动关联 GitHub 账号</p>
+    </div>
+
+    <!-- 加载失败 -->
+    <div v-else-if="ghError" class="setup-card">
+      <el-icon :size="48" color="#f87171"><CircleClose /></el-icon>
+      <h2 class="setup-title">加载失败</h2>
+      <p class="setup-hint">{{ ghError }}</p>
+      <div class="setup-row">
+        <el-input v-model="ghInput" placeholder="重新输入 GitHub 用户名" size="large" clearable @keyup.enter="loadGithub">
+          <template #prefix>
+            <svg viewBox="0 0 16 16" width="14" height="14"><path fill="#656d76" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+          </template>
+        </el-input>
+        <el-button type="primary" size="large" :loading="ghLoading" @click="loadGithub">重新加载</el-button>
+      </div>
     </div>
 
     <!-- 加载中 -->
@@ -97,93 +115,196 @@
         </div>
       </div>
 
-      <!-- Tab 标签页 -->
-      <el-tabs v-model="activeTab" class="repo-tabs">
-        <el-tab-pane :label="'仓库 (' + ghProfile.publicRepos + ')'" name="repos">
-          <!-- 搜索和排序 -->
-          <div class="tab-toolbar">
-            <el-input
-              v-model="repoSearch"
-              placeholder="搜索仓库..."
-              prefix-icon="Search"
-              clearable
-              style="width: 240px"
-              size="small"
-            />
-            <el-radio-group v-model="repoSort" size="small">
-              <el-radio-button value="updated">最近更新</el-radio-button>
-              <el-radio-button value="stars">最多 Star</el-radio-button>
-              <el-radio-button value="forks">最多 Fork</el-radio-button>
-            </el-radio-group>
+      <!-- 缓存状态提示 -->
+      <div v-if="cacheTime" class="cache-hint">
+        <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#8b949e" d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm.5 4.75a.75.75 0 0 0-1.5 0v3.5c0 .414.336.75.75.75h2.5a.75.75 0 0 0 0-1.5H8.5ZM8 12a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>
+        <span>数据缓存于 {{ formatCacheTime(cacheTime) }}，每小时自动更新</span>
+        <el-button text size="small" type="primary" @click="handleRefreshGithub" :loading="refreshing">立即刷新</el-button>
+      </div>
+
+      <!-- 统计概览行 -->
+      <div class="stats-row">
+        <div class="stat-mini-card">
+          <div class="stat-mini-icon" style="background: linear-gradient(135deg, #fef3c7, #fde68a)">
+            <svg viewBox="0 0 16 16" width="18" height="18"><path fill="#92400e" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+          </div>
+          <div class="stat-mini-body">
+            <div class="stat-mini-num">{{ formatNumber(totalStars) }}</div>
+            <div class="stat-mini-label">总 Stars</div>
+          </div>
+        </div>
+        <div class="stat-mini-card">
+          <div class="stat-mini-icon" style="background: linear-gradient(135deg, #f0fdf4, #dcfce7)">
+            <svg viewBox="0 0 16 16" width="18" height="18"><path fill="#2da44e" d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/></svg>
+          </div>
+          <div class="stat-mini-body">
+            <div class="stat-mini-num">{{ formatNumber(totalForks) }}</div>
+            <div class="stat-mini-label">总 Forks</div>
+          </div>
+        </div>
+        <div class="stat-mini-card">
+          <div class="stat-mini-icon" style="background: linear-gradient(135deg, #eff6ff, #dbeafe)">
+            <el-icon :size="18" color="#3b82f6"><TrendCharts /></el-icon>
+          </div>
+          <div class="stat-mini-body">
+            <div class="stat-mini-num">{{ avgStars }}</div>
+            <div class="stat-mini-label">平均 Stars</div>
+          </div>
+        </div>
+        <div class="stat-mini-card">
+          <div class="stat-mini-icon" style="background: linear-gradient(135deg, #f5f3ff, #ede9fe)">
+            <el-icon :size="18" color="#8b5cf6"><CircleCheck /></el-icon>
+          </div>
+          <div class="stat-mini-body">
+            <div class="stat-mini-num">{{ originalRepos }}</div>
+            <div class="stat-mini-label">原创仓库</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 主内容区：左仓库列表 + 右侧信息面板 -->
+      <div class="content-row">
+        <!-- 左侧：Tab 标签页 -->
+        <div class="content-left">
+          <el-tabs v-model="activeTab" class="repo-tabs">
+            <el-tab-pane :label="'仓库 (' + ghProfile.publicRepos + ')'" name="repos">
+              <!-- 搜索和排序 -->
+              <div class="tab-toolbar">
+                <el-input
+                  v-model="repoSearch"
+                  placeholder="搜索仓库..."
+                  prefix-icon="Search"
+                  clearable
+                  style="width: 240px"
+                  size="small"
+                />
+                <el-radio-group v-model="repoSort" size="small">
+                  <el-radio-button value="updated">最近更新</el-radio-button>
+                  <el-radio-button value="stars">最多 Star</el-radio-button>
+                  <el-radio-button value="forks">最多 Fork</el-radio-button>
+                </el-radio-group>
+              </div>
+
+              <!-- 仓库列表 -->
+              <div class="repo-list">
+                <div v-for="repo in filteredRepos" :key="repo.name" class="repo-item">
+                  <div class="repo-item-header">
+                    <a :href="repo.url" target="_blank" class="repo-item-name">
+                      <svg viewBox="0 0 16 16" width="16" height="16"><path fill="#656d76" d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/></svg>
+                      {{ repo.name }}
+                    </a>
+                    <span v-if="repo.fork" class="fork-badge">fork</span>
+                  </div>
+                  <p v-if="repo.description" class="repo-item-desc">{{ repo.description }}</p>
+                  <div class="repo-item-meta">
+                    <span v-if="repo.language" class="repo-lang">
+                      <span class="lang-dot" :style="{ background: langColor(repo.language) }"></span>
+                      {{ repo.language }}
+                    </span>
+                    <span v-if="repo.stars" class="repo-stat-link">
+                      <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#e3b341" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+                      {{ formatNumber(repo.stars) }}
+                    </span>
+                    <span v-if="repo.forks" class="repo-stat-link">
+                      <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#8b949e" d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/></svg>
+                      {{ formatNumber(repo.forks) }}
+                    </span>
+                    <span class="repo-updated">{{ formatRelative(repo.updatedAt) }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="ghRepos.length < ghProfile.publicRepos" class="load-more">
+                <el-button plain @click="loadMoreRepos" :loading="loadingMore">加载更多</el-button>
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane label="收藏仓库" name="starred">
+              <div v-if="ghStarred.length === 0 && !starredLoading" class="empty-hint">暂无收藏数据</div>
+              <div v-else-if="starredLoading" class="loading-card" style="padding: 40px">
+                <el-icon class="is-loading" :size="24" color="#2da44e"><Loading /></el-icon>
+                <span>加载中...</span>
+              </div>
+              <div v-else class="repo-list">
+                <div v-for="repo in ghStarred" :key="repo.name" class="repo-item">
+                  <div class="repo-item-header">
+                    <a :href="repo.url" target="_blank" class="repo-item-name">
+                      <svg viewBox="0 0 16 16" width="16" height="16"><path fill="#656d76" d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/></svg>
+                      {{ repo.name }}
+                    </a>
+                  </div>
+                  <p v-if="repo.description" class="repo-item-desc">{{ repo.description }}</p>
+                  <div class="repo-item-meta">
+                    <span v-if="repo.language" class="repo-lang">
+                      <span class="lang-dot" :style="{ background: langColor(repo.language) }"></span>
+                      {{ repo.language }}
+                    </span>
+                    <span v-if="repo.stars" class="repo-stat-link">
+                      <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#e3b341" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+                      {{ formatNumber(repo.stars) }}
+                    </span>
+                    <span v-if="repo.forks" class="repo-stat-link">
+                      <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#8b949e" d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/></svg>
+                      {{ formatNumber(repo.forks) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+
+        <!-- 右侧：信息面板 -->
+        <div class="side-panel">
+          <!-- Star 排行榜 -->
+          <div class="panel-card" v-if="topStarredRepos.length > 0">
+            <div class="panel-title">
+              <svg viewBox="0 0 16 16" width="14" height="14" style="margin-right: 4px"><path fill="#e3b341" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+              Star 排行
+            </div>
+            <div v-for="(repo, i) in topStarredRepos" :key="repo.name" class="rank-item">
+              <div class="rank-left">
+                <span class="rank-num" :class="{ 'rank-gold': i === 0, 'rank-silver': i === 1, 'rank-bronze': i === 2 }">{{ i + 1 }}</span>
+                <a :href="repo.url" target="_blank" class="rank-name">{{ repo.name }}</a>
+              </div>
+              <div class="rank-bar-wrap">
+                <div class="rank-bar" :style="{ width: repo.starPct + '%', background: langColor(repo.language) || '#2da44e' }"></div>
+              </div>
+              <span class="rank-value">{{ formatNumber(repo.stars) }}</span>
+            </div>
           </div>
 
-          <!-- 仓库列表 -->
-          <div class="repo-list">
-            <div v-for="repo in filteredRepos" :key="repo.name" class="repo-item">
-              <div class="repo-item-header">
-                <a :href="repo.url" target="_blank" class="repo-item-name">
-                  <svg viewBox="0 0 16 16" width="16" height="16"><path fill="#656d76" d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/></svg>
-                  {{ repo.name }}
-                </a>
-                <span v-if="repo.fork" class="fork-badge">fork</span>
+          <!-- 仓库类型分布 -->
+          <div class="panel-card">
+            <div class="panel-title">仓库类型</div>
+            <div class="type-stats">
+              <div class="type-row">
+                <span class="type-label">原创仓库</span>
+                <div class="type-bar-wrap">
+                  <div class="type-bar" :style="{ width: originalPct + '%' }"></div>
+                </div>
+                <span class="type-value">{{ originalRepos }}</span>
               </div>
-              <p v-if="repo.description" class="repo-item-desc">{{ repo.description }}</p>
-              <div class="repo-item-meta">
-                <span v-if="repo.language" class="repo-lang">
-                  <span class="lang-dot" :style="{ background: langColor(repo.language) }"></span>
-                  {{ repo.language }}
-                </span>
-                <span v-if="repo.stars" class="repo-stat-link">
-                  <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#e3b341" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
-                  {{ formatNumber(repo.stars) }}
-                </span>
-                <span v-if="repo.forks" class="repo-stat-link">
-                  <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#8b949e" d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/></svg>
-                  {{ formatNumber(repo.forks) }}
-                </span>
-                <span class="repo-updated">{{ formatRelative(repo.updatedAt) }}</span>
+              <div class="type-row">
+                <span class="type-label">Fork 仓库</span>
+                <div class="type-bar-wrap">
+                  <div class="type-bar fork-bar" :style="{ width: (100 - originalPct) + '%' }"></div>
+                </div>
+                <span class="type-value">{{ forkedRepos }}</span>
               </div>
             </div>
           </div>
 
-          <div v-if="ghRepos.length < ghProfile.publicRepos" class="load-more">
-            <el-button plain @click="loadMoreRepos" :loading="loadingMore">加载更多</el-button>
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="收藏仓库" name="starred">
-          <div v-if="ghStarred.length === 0 && !starredLoading" class="empty-hint">暂无收藏数据</div>
-          <div v-else-if="starredLoading" class="loading-card" style="padding: 40px">
-            <el-icon class="is-loading" :size="24" color="#2da44e"><Loading /></el-icon>
-            <span>加载中...</span>
-          </div>
-          <div v-else class="repo-list">
-            <div v-for="repo in ghStarred" :key="repo.name" class="repo-item">
-              <div class="repo-item-header">
-                <a :href="repo.url" target="_blank" class="repo-item-name">
-                  <svg viewBox="0 0 16 16" width="16" height="16"><path fill="#656d76" d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/></svg>
-                  {{ repo.name }}
-                </a>
-              </div>
-              <p v-if="repo.description" class="repo-item-desc">{{ repo.description }}</p>
-              <div class="repo-item-meta">
-                <span v-if="repo.language" class="repo-lang">
-                  <span class="lang-dot" :style="{ background: langColor(repo.language) }"></span>
-                  {{ repo.language }}
-                </span>
-                <span v-if="repo.stars" class="repo-stat-link">
-                  <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#e3b341" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
-                  {{ formatNumber(repo.stars) }}
-                </span>
-                <span v-if="repo.forks" class="repo-stat-link">
-                  <svg viewBox="0 0 16 16" width="13" height="13"><path fill="#8b949e" d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm-3 8.75a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/></svg>
-                  {{ formatNumber(repo.forks) }}
-                </span>
-              </div>
+          <!-- 最近活跃 -->
+          <div class="panel-card" v-if="recentActiveRepos.length > 0">
+            <div class="panel-title">最近活跃</div>
+            <div v-for="repo in recentActiveRepos" :key="repo.name" class="active-item">
+              <a :href="repo.url" target="_blank" class="active-name">{{ repo.name }}</a>
+              <span class="active-time">{{ formatRelative(repo.updatedAt) }}</span>
             </div>
           </div>
-        </el-tab-pane>
-      </el-tabs>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -191,20 +312,23 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Location, Link, Clock, Loading, Platform } from '@element-plus/icons-vue'
-import { getUserProfile, getUserRepos, getUserStarred } from '../api/github'
+import { Location, Link, Clock, Loading, Platform, CircleClose, TrendCharts, CircleCheck, Refresh } from '@element-plus/icons-vue'
+import { getUserProfile, getUserRepos, getUserStarred, refreshGithubCache } from '../api/github'
 
 const user = ref(null)
 const ghInput = ref('')
 const ghUsername = ref('')
 const ghLoading = ref(false)
 const ghProfile = ref(null)
+const ghError = ref('')
 const ghRepos = ref([])
 const ghStarred = ref([])
 const activeTab = ref('repos')
 const repoSearch = ref('')
 const repoSort = ref('updated')
 const loadingMore = ref(false)
+const cacheTime = ref(null)
+const refreshing = ref(false)
 const starredLoading = ref(false)
 const repoPerPage = ref(30)
 
@@ -225,6 +349,12 @@ function formatNumber(n) {
   if (num >= 1000000) return (num / 1000000).toFixed(1) + 'm'
   if (num >= 1000) return (num / 1000).toFixed(1) + 'k'
   return String(num)
+}
+
+function formatCacheTime(date) {
+  if (!date) return ''
+  const d = new Date(date)
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatRelative(dateStr) {
@@ -281,6 +411,35 @@ const filteredRepos = computed(() => {
   return list
 })
 
+// 统计计算
+const totalStars = computed(() => ghRepos.value.reduce((s, r) => s + (r.stars || 0), 0))
+const totalForks = computed(() => ghRepos.value.reduce((s, r) => s + (r.forks || 0), 0))
+const avgStars = computed(() => {
+  if (ghRepos.value.length === 0) return 0
+  return Math.round(totalStars.value / ghRepos.value.length)
+})
+const originalRepos = computed(() => ghRepos.value.filter(r => !r.fork).length)
+const forkedRepos = computed(() => ghRepos.value.filter(r => r.fork).length)
+const originalPct = computed(() => {
+  if (ghRepos.value.length === 0) return 0
+  return Math.round((originalRepos.value / ghRepos.value.length) * 100)
+})
+
+// Star 排行（top 5）
+const topStarredRepos = computed(() => {
+  const sorted = [...ghRepos.value].filter(r => r.stars > 0).sort((a, b) => b.stars - a.stars).slice(0, 5)
+  const maxStars = sorted.length > 0 ? sorted[0].stars : 1
+  return sorted.map(r => ({ ...r, starPct: Math.round((r.stars / maxStars) * 100) }))
+})
+
+// 最近活跃仓库（最近更新的 5 个）
+const recentActiveRepos = computed(() => {
+  return [...ghRepos.value]
+    .filter(r => r.updatedAt)
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .slice(0, 5)
+})
+
 async function loadGithub(username) {
   const name = username || ghInput.value.trim()
   if (!name) {
@@ -289,6 +448,7 @@ async function loadGithub(username) {
   }
   ghUsername.value = name
   ghLoading.value = true
+  ghError.value = ''
   try {
     const [profile, repos] = await Promise.all([
       getUserProfile(name),
@@ -296,13 +456,14 @@ async function loadGithub(username) {
     ])
     ghProfile.value = profile
     ghRepos.value = repos
+    cacheTime.value = new Date()
     localStorage.setItem('codexray_gh_user', name)
   } catch (e) {
     const msg = e?.message || ''
     if (msg.includes('404') || msg.includes('Not Found')) {
-      ElMessage.error('用户 "' + name + '" 不存在')
+      ghError.value = '用户 "' + name + '" 不存在，请检查用户名是否正确'
     } else {
-      ElMessage.error('加载失败：' + (msg || '网络错误'))
+      ghError.value = '加载 GitHub 数据失败：' + (msg || '网络错误，请稍后重试')
     }
     ghProfile.value = null
     ghRepos.value = []
@@ -335,6 +496,20 @@ async function loadStarred() {
   }
 }
 
+async function handleRefreshGithub() {
+  if (!ghUsername.value) return
+  refreshing.value = true
+  try {
+    await refreshGithubCache(ghUsername.value)
+    await loadGithub(ghUsername.value)
+    ElMessage.success('数据已刷新')
+  } catch (e) {
+    ElMessage.error('刷新失败')
+  } finally {
+    refreshing.value = false
+  }
+}
+
 watch(activeTab, (tab) => {
   if (tab === 'starred' && ghStarred.value.length === 0) {
     loadStarred()
@@ -362,13 +537,30 @@ async function initFromUser() {
   const ghUser = user.value?.githubUsername || localStorage.getItem('codexray_gh_user')
   if (ghUser && !ghProfile.value) {
     ghInput.value = ghUser
-    await loadGithub(ghUser)
+    try {
+      await loadGithub(ghUser)
+    } catch {
+      // loadGithub 已处理错误
+    }
   }
 }
 
-function onAuthChange() {
-  loadUser()
-  initFromUser()
+function onAuthChange(e) {
+  if (!e.detail) {
+    // 退出登录，清除 GitHub 数据
+    ghProfile.value = null
+    ghRepos.value = []
+    ghStarred.value = []
+    ghUsername.value = ''
+    ghInput.value = ''
+    ghError.value = ''
+    repoPerPage.value = 30
+    localStorage.removeItem('codexray_gh_user')
+  } else {
+    // 登录成功，加载新用户的 GitHub
+    loadUser()
+    initFromUser()
+  }
 }
 
 onMounted(() => {
@@ -637,6 +829,274 @@ onMounted(() => {
   padding: 20px 24px;
 }
 
+/* 缓存状态提示 */
+.cache-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #8b949e;
+  margin-bottom: 16px;
+}
+
+.cache-hint svg {
+  flex-shrink: 0;
+}
+
+.cache-hint span {
+  flex: 1;
+}
+
+/* 统计概览行 */
+.stats-row {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.stat-mini-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
+  padding: 16px 18px;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.stat-mini-card:hover {
+  border-color: #2da44e40;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.stat-mini-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-mini-num {
+  font-size: 22px;
+  font-weight: 800;
+  color: #1f2328;
+  line-height: 1.2;
+}
+
+.stat-mini-label {
+  font-size: 12px;
+  color: #8b949e;
+  margin-top: 1px;
+}
+
+/* 主内容区左右布局 */
+.content-row {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.content-left {
+  flex: 3;
+  min-width: 0;
+}
+
+.side-panel {
+  flex: 1;
+  min-width: 240px;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 28px;
+}
+
+.panel-card {
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2328;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f2f5;
+  display: flex;
+  align-items: center;
+}
+
+/* Star 排行 */
+.rank-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.rank-item:last-child {
+  border-bottom: none;
+}
+
+.rank-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.rank-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: #f6f8fa;
+  color: #656d76;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.rank-num.rank-gold { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; }
+.rank-num.rank-silver { background: #f3f4f6; color: #4b5563; }
+.rank-num.rank-bronze { background: linear-gradient(135deg, #fef2f2, #fed7aa); color: #9a3412; }
+
+.rank-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2328;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rank-name:hover {
+  color: #2da44e;
+}
+
+.rank-bar-wrap {
+  flex: 1;
+  height: 6px;
+  background: #f0f2f5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.rank-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  min-width: 4px;
+}
+
+.rank-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: #656d76;
+  flex-shrink: 0;
+  min-width: 30px;
+  text-align: right;
+}
+
+/* 仓库类型分布 */
+.type-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.type-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.type-label {
+  font-size: 12px;
+  color: #656d76;
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.type-bar-wrap {
+  flex: 1;
+  height: 8px;
+  background: #f0f2f5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.type-bar {
+  height: 100%;
+  background: #2da44e;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.type-bar.fork-bar {
+  background: #8b949e;
+}
+
+.type-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2328;
+  min-width: 24px;
+  text-align: right;
+}
+
+/* 最近活跃 */
+.active-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.active-item:last-child {
+  border-bottom: none;
+}
+
+.active-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2328;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-name:hover {
+  color: #2da44e;
+}
+
+.active-time {
+  font-size: 11px;
+  color: #8b949e;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
 .tab-toolbar {
   display: flex;
   justify-content: space-between;
@@ -732,6 +1192,12 @@ onMounted(() => {
 }
 
 /* 响应式 */
+@media (max-width: 1024px) {
+  .side-panel { display: none; }
+  .content-row { flex-direction: column; }
+  .content-left { flex: none; width: 100%; }
+}
+
 @media (max-width: 767px) {
   .page-header { flex-direction: column; align-items: flex-start; }
   .page-title { font-size: 20px; }
@@ -743,5 +1209,7 @@ onMounted(() => {
   .repo-tabs { padding: 16px; }
   .repo-item { padding: 12px; }
   .setup-row { flex-direction: column; }
+  .stats-row { flex-wrap: wrap; }
+  .stat-mini-card { min-width: calc(50% - 7px); }
 }
 </style>

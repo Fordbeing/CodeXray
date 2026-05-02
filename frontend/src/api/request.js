@@ -24,6 +24,13 @@ request.interceptors.response.use(
     return data.data
   },
   (error) => {
+    const status = error.response?.status
+    if (status === 401) {
+      localStorage.removeItem('codexray_token')
+      localStorage.removeItem('codexray_user')
+      window.dispatchEvent(new Event('auth-required'))
+      return Promise.reject(error)
+    }
     const msg = error.response?.data?.message || error.message || '网络异常'
     ElMessage.error(msg)
     return Promise.reject(error)

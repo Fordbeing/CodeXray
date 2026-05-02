@@ -23,6 +23,27 @@
           开始分析
         </el-button>
       </div>
+      <div class="upload-row">
+        <el-upload
+          ref="uploadRef"
+          :auto-upload="false"
+          :limit="1"
+          accept=".zip,.tar.gz,.tgz"
+          :on-change="handleFileChange"
+          :on-exceed="() => ElMessage.warning('请先移除已选文件')"
+          drag
+          class="upload-area"
+        >
+          <div class="upload-inner">
+            <el-icon :size="28" color="#8b949e"><Upload /></el-icon>
+            <div class="upload-text">拖拽代码压缩包到此处，或 <em>点击上传</em></div>
+            <div class="upload-hint">支持 .zip / .tar.gz 格式</div>
+          </div>
+        </el-upload>
+        <el-button type="success" size="large" :loading="uploading" :disabled="!uploadFile" @click="handleUpload">
+          上传并分析
+        </el-button>
+      </div>
     </el-card>
 
     <!-- 预览结果 -->
@@ -153,6 +174,18 @@
         <!-- 总结 -->
         <el-alert v-if="report.verdict" :title="report.verdict" type="success" :closable="false" show-icon />
 
+        <!-- 操作按钮 -->
+        <div class="action-bar">
+          <el-button @click="copyCloneUrl">
+            <el-icon style="margin-right: 4px"><CopyDocument /></el-icon>
+            复制 Clone 命令
+          </el-button>
+          <el-button @click="openGitHub">
+            <el-icon style="margin-right: 4px"><Link /></el-icon>
+            打开 GitHub
+          </el-button>
+        </div>
+
         <!-- 跳转问答 -->
         <div class="chat-jump">
           <el-button type="primary" size="large" @click="goToChat">
@@ -173,7 +206,9 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { analyzeRepo, getAnalysisResult, previewRepo } from '../api/analysis'
+import { ElMessage } from 'element-plus'
+import { Upload, CopyDocument } from '@element-plus/icons-vue'
+import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo } from '../api/analysis'
 
 const route = useRoute()
 const router = useRouter()
@@ -181,6 +216,9 @@ const router = useRouter()
 const repoUrl = ref('')
 const previewing = ref(false)
 const analyzing = ref(false)
+const uploading = ref(false)
+const uploadFile = ref(null)
+const uploadRef = ref(null)
 const preview = ref(null)
 const taskId = ref('')
 const taskStatus = ref('')
@@ -300,6 +338,37 @@ onUnmounted(() => {
 function goToChat() {
   router.push({ path: '/chat', query: { repoUrl: repoUrl.value, taskId: taskId.value } })
 }
+
+function handleFileChange(file) {
+  uploadFile.value = file.raw
+}
+
+async function handleUpload() {
+  if (!uploadFile.value) return
+  uploading.value = true
+  report.value = null
+  try {
+    taskId.value = await uploadAndAnalyze(uploadFile.value)
+    taskStatus.value = 'PENDING'
+    router.replace({ path: `/analyze/${taskId.value}` })
+    startPolling()
+    uploadRef.value?.clearFiles()
+    uploadFile.value = null
+  } finally {
+    uploading.value = false
+  }
+}
+
+function copyCloneUrl() {
+  if (!repoUrl.value) return
+  navigator.clipboard.writeText('git clone ' + repoUrl.value)
+  ElMessage.success('Clone 命令已复制到剪贴板')
+}
+
+function openGitHub() {
+  if (!repoUrl.value) return
+  window.open(repoUrl.value, '_blank')
+}
 </script>
 
 <style scoped>
@@ -321,6 +390,48 @@ function goToChat() {
 
 .input-row .el-input {
   flex: 1;
+}
+
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.upload-area {
+  flex: 1;
+}
+
+.upload-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.upload-text {
+  font-size: 13px;
+  color: #656d76;
+}
+
+.upload-text em {
+  color: #2da44e;
+  font-style: normal;
+}
+
+.upload-hint {
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.action-bar {
+  display: flex;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid #e8ecf0;
+  margin-top: 16px;
 }
 
 .section-card {
