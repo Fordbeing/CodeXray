@@ -66,17 +66,17 @@
         <div class="url-row">
           <el-input
             v-model="repoUrl"
-            placeholder="输入 GitHub 仓库地址，按回车加载对话"
+            placeholder="新建对话的仓库地址（可选，用于 RAG 精确问答）"
             size="large"
             clearable
-            @keyup.enter="loadSessions"
           >
             <template #prefix>
               <el-icon><Link /></el-icon>
             </template>
           </el-input>
-          <el-button size="large" @click="loadSessions" :loading="loadingSessions">
-            加载
+          <el-button type="primary" size="large" @click="handleNewSession" :disabled="!repoUrl.trim()">
+            <el-icon style="margin-right: 4px"><Plus /></el-icon>
+            新建对话
           </el-button>
         </div>
         <div v-if="currentTaskId" class="task-id-hint">
@@ -234,7 +234,8 @@ onUnmounted(() => {
 watch(() => route.query, (q) => {
   if (q.repoUrl && q.repoUrl !== repoUrl.value) repoUrl.value = q.repoUrl
   if (q.taskId) currentTaskId.value = q.taskId
-  if (q.repoUrl) loadSessions()
+  // 从其他页面带参数过来时，自动刷新会话列表（加载全部）
+  if (q.repoUrl || q.taskId) loadSessions()
 })
 
 // 状态持久化
@@ -332,23 +333,20 @@ function startPolling(pollId, messageIndex) {
 async function loadSessions() {
   loadingSessions.value = true
   try {
-    const url = repoUrl.value.trim() || undefined
-    sessions.value = await listChatSessions(url) || []
+    // 始终加载当前用户的所有会话，不按 repoUrl 过滤
+    sessions.value = await listChatSessions() || []
 
     // 同步当前会话的消息：确保左侧列表和右侧消息一致
     if (currentSessionId.value) {
       const exists = sessions.value.some(s => s.sessionId === currentSessionId.value)
       if (exists) {
-        // 当前会话存在，从后端加载最新消息
         const history = await getChatHistory(currentSessionId.value)
         messages.value = (history || []).map(h => ({ role: h.role, content: h.content }))
       } else {
-        // 当前会话已被清理，重置
         currentSessionId.value = null
         messages.value = []
       }
     } else if (messages.value.length > 0) {
-      // 没有当前会话但有残留消息，清空
       messages.value = []
     }
     saveState()
@@ -366,8 +364,9 @@ async function switchSession(session) {
   activePolls.clear()
 
   currentSessionId.value = session.sessionId
-  repoUrl.value = session.repoUrl || repoUrl.value
-  currentTaskId.value = session.taskId || currentTaskId.value
+  // 切换会话时更新仓库地址和任务ID，方便用户继续对话
+  if (session.repoUrl) repoUrl.value = session.repoUrl
+  if (session.taskId) currentTaskId.value = session.taskId
   if (window.innerWidth < 768) sidebarOpen.value = false
   try {
     const history = await getChatHistory(session.sessionId)
