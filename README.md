@@ -347,11 +347,15 @@ CodeXray/
 > 部署后截图展示区 — 建议添加以下页面截图：
 
 - **仪表盘** — 欢迎卡片 + 统计 + 最近分析 + 热点速览
+  <img width="1905" height="896" alt="仪表盘" src="https://github.com/user-attachments/assets/2c966759-840e-41fb-a329-c67f7fa8edbd" />
 - **仓库分析** — 分析报告（评分雷达图 + 模块分析 + 改进建议）
+  <img width="1905" height="896" alt="仓库分析" src="https://github.com/user-attachments/assets/14142382-1a2f-4c3d-a5cc-4ca490ff0b8e" />
 - **代码问答** — RAG 对话界面（Markdown 渲染 + 代码高亮）
+  <img width="1905" height="896" alt="代码回答" src="https://github.com/user-attachments/assets/848e419e-9653-42cf-b171-e2b1bc3d85f4" />
 - **热点推送** — GitHub Trending 卡片 + AI 分析 + 语言分布
+  <img width="1905" height="896" alt="热点推送" src="https://github.com/user-attachments/assets/fcb2cc21-8644-443a-b243-e0eec594d88c" />
 - **系统设置** — AI 模型配置（服务商选择 + 连接测试）
-
+  <img width="1905" height="896" alt="系统设置" src="https://github.com/user-attachments/assets/17da19e4-60f1-4935-bc12-24f10ff519fb" />
 ---
 
 ##  核心亮点
