@@ -1,10 +1,10 @@
 package com.codexray.rag;
 
+import com.codexray.service.SettingService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -18,6 +18,7 @@ import java.util.Map;
 /**
  * Embedding 向量生成服务。
  * 优先调用 Embedding API（OpenAI 兼容），不可用时降级为文本哈希向量。
+ * 配置从 SettingService 动态读取。
  */
 @Service
 public class EmbeddingService {
@@ -25,25 +26,89 @@ public class EmbeddingService {
     private static final Logger log = LoggerFactory.getLogger(EmbeddingService.class);
     private static final int DIMENSION = 768;
 
-    private final WebClient webClient;
+    private final SettingService settingService;
     private final ObjectMapper objectMapper;
-    private final String model;
-    private boolean apiAvailable = true;
 
-    public EmbeddingService(
-            @Value("${codexray.llm.embedding-url:}") String embeddingUrl,
-            @Value("${codexray.llm.api-key:}") String apiKey,
-            @Value("${codexray.llm.embedding-model:text-embedding-3-small}") String model,
-            ObjectMapper objectMapper) {
-        this.model = model;
+    // 缓存 WebClient，配置变更时重建
+    private WebClient cachedWebClient;
+    private String cachedUrl;
+    private String cachedKey;
+
+    // 失败恢复
+    private boolean apiAvailable = true;
+    private long lastFailureTime = 0;
+    private static final long RETRY_INTERVAL_MS = 60_000; // 1 分钟后重试
+
+    public EmbeddingService(SettingService settingService, ObjectMapper objectMapper) {
+        this.settingService = settingService;
         this.objectMapper = objectMapper;
-        this.webClient = (embeddingUrl != null && !embeddingUrl.isBlank())
-                ? WebClient.builder()
-                    .baseUrl(embeddingUrl)
-                    .defaultHeader("Authorization", "Bearer " + apiKey)
-                    .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
-                    .build()
-                : null;
+        log.info("EmbeddingService initialized (settings-driven)");
+    }
+
+    private String getEmbeddingUrl() {
+        String val = settingService.get("ai_embedding_url");
+        if (val != null && !val.isBlank()) return val;
+        // 没有单独配置时，使用主 API URL
+        val = settingService.get("ai_base_url");
+        return (val != null && !val.isBlank()) ? val : null;
+    }
+
+    private String getApiKey() {
+        String val = settingService.get("ai_api_key");
+        return (val != null && !val.isBlank()) ? val : null;
+    }
+
+    private String getEmbeddingModel() {
+        String val = settingService.get("ai_embedding_model");
+        if (val != null && !val.isBlank()) return val;
+        return "text-embedding-3-small";
+    }
+
+    private synchronized WebClient getWebClient() {
+        String url = getEmbeddingUrl();
+        String key = getApiKey();
+        if (url == null) return null;
+        if (cachedWebClient != null && url.equals(cachedUrl) && (key == null ? cachedKey == null : key.equals(cachedKey))) {
+            return cachedWebClient;
+        }
+        WebClient.Builder builder = WebClient.builder().baseUrl(url);
+        if (key != null) {
+            builder.defaultHeader("Authorization", "Bearer " + key);
+        }
+        cachedWebClient = builder
+                .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .build();
+        cachedUrl = url;
+        cachedKey = key;
+        log.info("Embedding WebClient rebuilt: url={}, model={}", url, getEmbeddingModel());
+        return cachedWebClient;
+    }
+
+    /** 是否已配置 Embedding API */
+    public boolean isConfigured() {
+        return getEmbeddingUrl() != null && getApiKey() != null;
+    }
+
+    /** 当前 API 是否可用（未永久降级） */
+    public boolean isApiAvailable() {
+        if (!apiAvailable && System.currentTimeMillis() - lastFailureTime > RETRY_INTERVAL_MS) {
+            apiAvailable = true; // 自动恢复
+        }
+        return apiAvailable && isConfigured();
+    }
+
+    /** 重置状态（配置变更时调用） */
+    public void resetApiStatus() {
+        apiAvailable = true;
+        lastFailureTime = 0;
+    }
+
+    /** 测试 Embedding API 连接 */
+    public String testConnection() {
+        WebClient wc = getWebClient();
+        if (wc == null) throw new RuntimeException("Embedding API 未配置，请先在设置中配置 AI 模型");
+        float[] vec = callEmbeddingApi("test");
+        return "OK (维度: " + vec.length + ", 模型: " + getEmbeddingModel() + ")";
     }
 
     /**
@@ -53,18 +118,24 @@ public class EmbeddingService {
         if (text == null || text.isBlank()) {
             return new float[DIMENSION];
         }
-
-        // 截断过长文本
         if (text.length() > 8000) {
             text = text.substring(0, 8000);
         }
 
-        if (apiAvailable && webClient != null) {
+        // 检查是否可以恢复
+        if (!apiAvailable && System.currentTimeMillis() - lastFailureTime > RETRY_INTERVAL_MS) {
+            apiAvailable = true;
+            log.info("Embedding API retrying after cooldown");
+        }
+
+        WebClient wc = getWebClient();
+        if (apiAvailable && wc != null) {
             try {
                 return callEmbeddingApi(text);
             } catch (Exception e) {
                 log.warn("Embedding API failed, falling back to hash: {}", e.getMessage());
                 apiAvailable = false;
+                lastFailureTime = System.currentTimeMillis();
             }
         }
 
@@ -76,18 +147,23 @@ public class EmbeddingService {
      */
     public List<float[]> embedBatch(List<String> texts) {
         List<float[]> results = new ArrayList<>();
-        // 每批 20 条
         for (int i = 0; i < texts.size(); i += 20) {
             int end = Math.min(i + 20, texts.size());
             List<String> batch = texts.subList(i, end);
 
-            if (apiAvailable && webClient != null) {
+            if (!apiAvailable && System.currentTimeMillis() - lastFailureTime > RETRY_INTERVAL_MS) {
+                apiAvailable = true;
+            }
+
+            WebClient wc = getWebClient();
+            if (apiAvailable && wc != null) {
                 try {
                     results.addAll(callBatchEmbeddingApi(batch));
                     continue;
                 } catch (Exception e) {
                     log.warn("Batch embedding API failed: {}", e.getMessage());
                     apiAvailable = false;
+                    lastFailureTime = System.currentTimeMillis();
                 }
             }
 
@@ -99,8 +175,10 @@ public class EmbeddingService {
     }
 
     private float[] callEmbeddingApi(String text) {
+        WebClient wc = getWebClient();
+        String model = getEmbeddingModel();
         Map<String, Object> body = Map.of("model", model, "input", text);
-        String response = webClient.post()
+        String response = wc.post()
                 .uri("/embeddings")
                 .bodyValue(body)
                 .retrieve()
@@ -125,8 +203,10 @@ public class EmbeddingService {
     }
 
     private List<float[]> callBatchEmbeddingApi(List<String> texts) {
+        WebClient wc = getWebClient();
+        String model = getEmbeddingModel();
         Map<String, Object> body = Map.of("model", model, "input", texts);
-        String response = webClient.post()
+        String response = wc.post()
                 .uri("/embeddings")
                 .bodyValue(body)
                 .retrieve()
@@ -155,22 +235,15 @@ public class EmbeddingService {
 
     /**
      * 哈希降级 embedding：确定性、可复现，但语义能力有限。
-     * 用于 Embedding API 不可用时的降级方案。
      */
     private float[] hashEmbed(String text) {
         float[] vec = new float[DIMENSION];
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] hash = md.digest(text.getBytes());
-
-            // 用哈希填充向量（归一化）
-            ByteBuffer buf = ByteBuffer.wrap(hash);
             for (int i = 0; i < DIMENSION; i++) {
-                int idx = i % hash.length;
-                vec[i] = ((hash[idx] & 0xFF) / 128.0f) - 1.0f;
+                vec[i] = ((hash[i % hash.length] & 0xFF) / 128.0f) - 1.0f;
             }
-
-            // 归一化
             float norm = 0;
             for (float v : vec) norm += v * v;
             norm = (float) Math.sqrt(norm);
@@ -178,7 +251,6 @@ public class EmbeddingService {
                 for (int i = 0; i < vec.length; i++) vec[i] /= norm;
             }
         } catch (Exception e) {
-            // 最差情况：随机填充
             for (int i = 0; i < DIMENSION; i++) {
                 vec[i] = (float) (Math.random() * 2 - 1);
             }

@@ -12,6 +12,10 @@ export function testAiConnection() {
   return request.post('/settings/test-ai')
 }
 
+export function testEmbeddingConnection() {
+  return request.post('/settings/test-embedding')
+}
+
 // AI Presets
 export function getAiPresets() {
   return request.get('/settings/presets/ai')

@@ -150,6 +150,35 @@
             </div>
           </div>
 
+          <!-- Embedding 配置 -->
+          <div class="form-row two-col">
+            <div class="form-item">
+              <div class="label-row">
+                <label class="form-label">Embedding 模型</label>
+                <el-button link type="primary" size="small" :loading="testingEmbedding" @click="handleTestEmbedding" :disabled="!aiConfigured">
+                  <el-icon style="margin-right: 4px"><Connection /></el-icon>
+                  测试 Embedding
+                </el-button>
+              </div>
+              <el-input v-model="form.ai_embedding_model" placeholder="留空默认 text-embedding-3-small" size="large" />
+              <div class="form-hint">向量化模型，用于代码语义搜索（RAG），留空则使用默认模型</div>
+            </div>
+            <div class="form-item">
+              <label class="form-label">Embedding URL</label>
+              <el-input v-model="form.ai_embedding_url" :placeholder="form.ai_base_url || '留空则使用上方 API Base URL'" size="large" />
+              <div class="form-hint">单独的 Embedding 服务地址，一般与 API 地址相同</div>
+            </div>
+          </div>
+
+          <!-- Embedding 测试结果 -->
+          <div v-if="embeddingTestResult" :class="['test-result', embeddingTestResult.success ? 'test-success' : 'test-error']">
+            <el-icon :size="16">
+              <CircleCheckFilled v-if="embeddingTestResult.success" />
+              <CircleCloseFilled v-else />
+            </el-icon>
+            <span>{{ embeddingTestResult.message }}</span>
+          </div>
+
           <!-- 测试结果 -->
           <div v-if="testResult" :class="['test-result', testResult.success ? 'test-success' : 'test-error']">
             <el-icon :size="16">
@@ -307,7 +336,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  getSettings, updateSettings, testAiConnection,
+  getSettings, updateSettings, testAiConnection, testEmbeddingConnection,
   getAiPresets, saveAiPreset, deleteAiPreset,
   getMailPresets, saveMailPreset, deleteMailPreset
 } from '../api/settings'
@@ -322,6 +351,8 @@ const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const testResult = ref(null)
+const testingEmbedding = ref(false)
+const embeddingTestResult = ref(null)
 const selectedProvider = ref('')
 const saveStatus = ref('idle')
 const loadDone = ref(false)
@@ -461,6 +492,8 @@ const form = ref({
   ai_api_key: '',
   ai_base_url: '',
   ai_model: '',
+  ai_embedding_model: '',
+  ai_embedding_url: '',
   ai_max_tokens: 4096,
   mail_enabled: false,
   mail_host: '',
@@ -720,12 +753,28 @@ async function handleTestAi() {
   }
 }
 
+async function handleTestEmbedding() {
+  testingEmbedding.value = true
+  embeddingTestResult.value = null
+  clearTimeout(saveTimer)
+  await doSave()
+  try {
+    const res = await testEmbeddingConnection()
+    embeddingTestResult.value = { success: true, message: `Embedding 连接成功！${res}` }
+  } catch (e) {
+    const msg = e?.response?.data?.message || e?.message || '连接失败'
+    embeddingTestResult.value = { success: false, message: msg }
+  } finally {
+    testingEmbedding.value = false
+  }
+}
+
 // ---- Auth change ----
 function onAuthChange(e) {
   if (!e.detail) {
     // 退出登录，重置表单
     form.value = {
-      ai_api_key: '', ai_base_url: '', ai_model: '', ai_max_tokens: 4096,
+      ai_api_key: '', ai_base_url: '', ai_model: '', ai_embedding_model: '', ai_embedding_url: '', ai_max_tokens: 4096,
       mail_enabled: false, mail_host: '', mail_port: 587,
       mail_username: '', mail_password: '',
       chat_max_history: 20, default_language: 'zh'
@@ -734,6 +783,7 @@ function onAuthChange(e) {
     aiPresets.value = []
     mailPresets.value = []
     testResult.value = null
+    embeddingTestResult.value = null
     saveStatus.value = 'idle'
     loadDone.value = false
   } else {

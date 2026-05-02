@@ -2,6 +2,7 @@ package com.codexray.controller;
 
 import com.codexray.common.Result;
 import com.codexray.llm.LlmClient;
+import com.codexray.rag.EmbeddingService;
 import com.codexray.service.SettingService;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,10 +15,12 @@ public class SettingController {
 
     private final SettingService settingService;
     private final LlmClient llmClient;
+    private final EmbeddingService embeddingService;
 
-    public SettingController(SettingService settingService, LlmClient llmClient) {
+    public SettingController(SettingService settingService, LlmClient llmClient, EmbeddingService embeddingService) {
         this.settingService = settingService;
         this.llmClient = llmClient;
+        this.embeddingService = embeddingService;
     }
 
     @GetMapping
@@ -38,6 +41,17 @@ public class SettingController {
             return Result.ok(response);
         } catch (Exception e) {
             return Result.error("AI 连接失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/test-embedding")
+    public Result<String> testEmbeddingConnection() {
+        try {
+            embeddingService.resetApiStatus();
+            String result = embeddingService.testConnection();
+            return Result.ok(result);
+        } catch (Exception e) {
+            return Result.error("Embedding 连接失败: " + e.getMessage());
         }
     }
 
