@@ -79,19 +79,20 @@
     </el-card>
 
     <!-- 分析进度 -->
-    <el-card v-if="taskId && (taskStatus === 'CLONING' || taskStatus === 'ANALYZING' || taskStatus === 'PENDING')" class="section-card" shadow="never">
+    <el-card v-if="taskId && !['COMPLETED', 'FAILED'].includes(taskStatus)" class="section-card" shadow="never">
       <template #header>
         <span class="section-title">分析进度</span>
       </template>
       <el-steps :active="stepActive" finish-status="success" align-center>
         <el-step title="提交任务" />
+        <el-step title="检查配置" />
         <el-step title="克隆仓库" />
         <el-step title="AI 分析" />
         <el-step title="完成" />
       </el-steps>
       <div class="progress-hint">
         <el-icon class="is-loading"><Loading /></el-icon>
-        <span>正在{{ taskStatus === 'CLONING' ? '克隆仓库' : '进行 AI 分析' }}，请稍候...</span>
+        <span>{{ progressText }}</span>
       </div>
     </el-card>
 
@@ -198,7 +199,19 @@
 
     <!-- 失败 -->
     <el-card v-if="taskStatus === 'FAILED'" class="section-card" shadow="never">
-      <el-alert :title="errorMessage || '分析失败'" type="error" :closable="false" show-icon />
+      <div class="error-section">
+        <el-alert :title="errorMessage || '分析失败'" type="error" :closable="false" show-icon />
+        <div class="error-actions">
+          <el-button type="primary" @click="$router.push('/settings')">
+            <el-icon style="margin-right: 4px"><Setting /></el-icon>
+            前往系统设置
+          </el-button>
+          <el-button @click="handleRetry">
+            <el-icon style="margin-right: 4px"><RefreshRight /></el-icon>
+            重新分析
+          </el-button>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
@@ -207,7 +220,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload, CopyDocument } from '@element-plus/icons-vue'
+import { Upload, CopyDocument, Setting, RefreshRight } from '@element-plus/icons-vue'
 import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo } from '../api/analysis'
 
 const route = useRoute()
@@ -237,10 +250,25 @@ const scoreLabels = {
 const stepActive = computed(() => {
   switch (taskStatus.value) {
     case 'PENDING': return 1
-    case 'CLONING': return 2
-    case 'ANALYZING': return 3
-    case 'COMPLETED': return 4
+    case 'CHECKING': return 2
+    case 'CLONING': return 3
+    case 'SCANNING': return 3
+    case 'ANALYZING': return 4
+    case 'REPORTING': return 4
+    case 'COMPLETED': return 5
     default: return 0
+  }
+})
+
+const progressText = computed(() => {
+  switch (taskStatus.value) {
+    case 'CHECKING': return '正在检查 AI 模型配置...'
+    case 'CLONING': return '正在克隆仓库，请稍候...'
+    case 'SCANNING': return '正在扫描代码结构...'
+    case 'ANALYZING': return '正在进行 AI 分析，请稍候...'
+    case 'REPORTING': return '正在生成分析报告...'
+    case 'PENDING': return '任务已提交，等待处理...'
+    default: return '处理中...'
   }
 })
 
@@ -368,6 +396,16 @@ function copyCloneUrl() {
 function openGitHub() {
   if (!repoUrl.value) return
   window.open(repoUrl.value, '_blank')
+}
+
+function handleRetry() {
+  taskId.value = ''
+  taskStatus.value = ''
+  errorMessage.value = ''
+  report.value = null
+  if (repoUrl.value) {
+    handleAnalyze()
+  }
 }
 </script>
 
@@ -587,5 +625,16 @@ function openGitHub() {
   padding-top: 16px;
   border-top: 1px solid #e8ecf0;
   margin-top: 16px;
+}
+
+.error-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.error-actions {
+  display: flex;
+  gap: 12px;
 }
 </style>

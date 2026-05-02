@@ -1,5 +1,6 @@
 package com.codexray.agent;
 
+import com.codexray.llm.LlmClient;
 import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.entity.AnalysisTask;
 import com.codexray.service.MinioService;
@@ -32,17 +33,20 @@ public class AnalysisPipeline {
     private final ReporterAgent reporterAgent;
     private final AnalysisTaskMapper taskMapper;
     private final MinioService minioService;
+    private final LlmClient llmClient;
     private final ExecutorService vtExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public AnalysisPipeline(ScannerAgent scannerAgent, IndexerAgent indexerAgent,
                             AnalyzerAgent analyzerAgent, ReporterAgent reporterAgent,
-                            AnalysisTaskMapper taskMapper, MinioService minioService) {
+                            AnalysisTaskMapper taskMapper, MinioService minioService,
+                            LlmClient llmClient) {
         this.scannerAgent = scannerAgent;
         this.indexerAgent = indexerAgent;
         this.analyzerAgent = analyzerAgent;
         this.reporterAgent = reporterAgent;
         this.taskMapper = taskMapper;
         this.minioService = minioService;
+        this.llmClient = llmClient;
     }
 
     /**
@@ -51,6 +55,22 @@ public class AnalysisPipeline {
      */
     public void execute(String taskId, Long dbId, String repoPath, String repoUrl) {
         try {
+            // 前置检查：验证 AI 模型可用
+            updateStatus(dbId, "CHECKING");
+            try {
+                llmClient.testConnection();
+                log.info("AI pre-flight check passed for task: {}", taskId);
+            } catch (Exception e) {
+                log.error("AI pre-flight check failed for task {}: {}", taskId, e.getMessage());
+                AnalysisTask task = new AnalysisTask();
+                task.setId(dbId);
+                task.setStatus("FAILED");
+                task.setErrorMessage("AI 模型连接失败: " + e.getMessage() + "。请在「系统设置」中检查 AI 配置后重试。");
+                task.setUpdatedAt(LocalDateTime.now());
+                taskMapper.updateById(task);
+                return;
+            }
+
             // Stage 1 + 2 并行执行（虚拟线程）
             updateStatus(dbId, "SCANNING");
             Future<ScannerAgent.ScanResult> scanFuture = vtExecutor.submit(
