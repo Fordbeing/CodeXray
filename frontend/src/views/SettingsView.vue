@@ -661,6 +661,8 @@ async function loadAiPreset(p) {
   testResult.value = null
   await nextTick()
   loadingPreset.value = false
+  // 立即保存，不依赖延迟定时器（防止用户快速切换页面导致保存丢失）
+  await doSave()
 }
 
 async function handleSaveAiPreset() {
@@ -694,7 +696,7 @@ async function handleDeleteAiPreset(name) {
   } catch {}
 }
 
-function loadMailPreset(p) {
+async function loadMailPreset(p) {
   clearTimeout(saveTimer)
   loadingPreset.value = true
   form.value.mail_host = p.mail_host || ''
@@ -702,7 +704,10 @@ function loadMailPreset(p) {
   form.value.mail_username = p.mail_username || ''
   form.value.mail_password = p.mail_password || ''
   testResult.value = null
-  nextTick(() => { loadingPreset.value = false })
+  await nextTick()
+  loadingPreset.value = false
+  // 立即保存，不依赖延迟定时器
+  await doSave()
 }
 
 async function handleSaveMailPreset() {
