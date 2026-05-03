@@ -64,8 +64,9 @@ public class AnalyzerAgent {
     }
 
     private ModuleAnalysis analyzeCategory(String taskId, String category) {
-        List<VectorStoreService.CodeChunkDoc> chunks = vectorStoreService.search(
-                taskId, new float[768], 50, category
+        // 使用纯类别过滤搜索，而非无意义的零向量 knn
+        List<VectorStoreService.CodeChunkDoc> chunks = vectorStoreService.searchByCategory(
+                taskId, category, 50
         );
         if (chunks.isEmpty()) return null;
 

@@ -17,8 +17,11 @@ public class JwtUtil {
     private final long expirationMs;
 
     public JwtUtil(
-            @Value("${codexray.jwt.secret:codexray-default-secret-key-change-in-production-2024}") String secret,
+            @Value("${codexray.jwt.secret}") String secret,
             @Value("${codexray.jwt.expiration:86400000}") long expirationMs) {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("JWT secret must be configured via codexray.jwt.secret or JWT_SECRET env var");
+        }
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expirationMs = expirationMs;
     }

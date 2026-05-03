@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class SettingService {
@@ -17,7 +18,7 @@ public class SettingService {
     private static final Logger log = LoggerFactory.getLogger(SettingService.class);
 
     private final SysSettingMapper settingMapper;
-    private final Map<String, String> cache = new HashMap<>();
+    private final Map<String, String> cache = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public SettingService(SysSettingMapper settingMapper) {

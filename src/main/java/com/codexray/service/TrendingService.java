@@ -13,7 +13,9 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -21,8 +23,6 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -39,14 +39,16 @@ public class TrendingService {
     private final LlmClient llmClient;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
-    private final ExecutorService analysisExecutor = Executors.newFixedThreadPool(3);
+    private final ThreadPoolTaskExecutor analysisExecutor;
 
     public TrendingService(TrendingRepoMapper trendingRepoMapper, LlmClient llmClient,
-                           RedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper) {
+                           RedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper,
+                           @Qualifier("trendingExecutor") ThreadPoolTaskExecutor analysisExecutor) {
         this.trendingRepoMapper = trendingRepoMapper;
         this.llmClient = llmClient;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.analysisExecutor = analysisExecutor;
     }
 
     /**
@@ -149,7 +151,7 @@ public class TrendingService {
     }
 
     /**
-     * 查询今日热门（带缓存），无数据时自动抓取。
+     * 查询今日热门（带缓存），无数据时异步抓取。
      */
     public List<TrendingRepoResponse> getTodayTrending(String lang) {
         LocalDate today = LocalDate.now();
@@ -157,8 +159,16 @@ public class TrendingService {
         if (!results.isEmpty()) {
             return results;
         }
-        scrapeAndSave();
-        return getTrending(today, lang);
+        // 无数据时异步抓取，不阻塞请求
+        analysisExecutor.submit(() -> {
+            try {
+                scrapeAndSave();
+                log.info("Async trending scrape completed");
+            } catch (Exception e) {
+                log.error("Async trending scrape failed", e);
+            }
+        });
+        return List.of();
     }
 
     // ========== 内部方法 ==========

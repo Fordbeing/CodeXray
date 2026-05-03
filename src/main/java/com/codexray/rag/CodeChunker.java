@@ -1,5 +1,6 @@
 package com.codexray.rag;
 
+import com.codexray.common.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -16,11 +17,6 @@ import java.util.*;
 public class CodeChunker {
 
     private static final Logger log = LoggerFactory.getLogger(CodeChunker.class);
-
-    private static final Set<String> SKIP_DIRS = Set.of(
-            ".git", "node_modules", "target", "build", "dist", ".idea", ".vscode",
-            "__pycache__", ".gradle", ".mvn", "vendor", "venv", ".venv"
-    );
 
     private static final Set<String> CODE_EXTENSIONS = Set.of(
             ".java", ".py", ".js", ".ts", ".go", ".rs", ".kt", ".scala",
@@ -58,7 +54,7 @@ public class CodeChunker {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    if (SKIP_DIRS.contains(dir.getFileName().toString())) {
+                    if (Constants.SKIP_DIRS.contains(dir.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;

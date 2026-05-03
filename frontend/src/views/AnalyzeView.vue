@@ -220,7 +220,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload, CopyDocument, Setting, RefreshRight } from '@element-plus/icons-vue'
+import { Upload, CopyDocument, Setting, RefreshRight, ChatDotRound } from '@element-plus/icons-vue'
 import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo } from '../api/analysis'
 
 const route = useRoute()

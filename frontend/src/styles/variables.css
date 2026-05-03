@@ -135,3 +135,36 @@ body {
     max-width: 420px !important;
   }
 }
+
+/* 暗色模式 */
+html.dark {
+  --el-text-color-primary: #e6edf3;
+  --el-text-color-regular: #adbac7;
+  --el-text-color-secondary: #768390;
+  --el-text-color-placeholder: #768390;
+
+  --el-border-color: #444c56;
+  --el-border-color-light: #373e47;
+  --el-border-color-lighter: #2d333b;
+
+  --el-bg-color: #22272e;
+  --el-bg-color-page: #1c2128;
+  --el-bg-color-overlay: #2d333b;
+
+  --el-fill-color: #2d333b;
+  --el-fill-color-light: #2d333b;
+  --el-fill-color-lighter: #373e47;
+}
+
+html.dark body {
+  background-color: #1c2128;
+  color: #e6edf3;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #444c56;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #768390;
+}

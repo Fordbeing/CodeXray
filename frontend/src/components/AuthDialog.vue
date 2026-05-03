@@ -49,6 +49,7 @@
 <script setup>
 import { ref, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Link, Lock, User } from '@element-plus/icons-vue'
 import { login, register } from '../api/auth'
 
 const visible = defineModel({ type: Boolean })

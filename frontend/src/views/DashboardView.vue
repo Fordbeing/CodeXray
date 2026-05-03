@@ -1,6 +1,11 @@
 <template>
   <div class="dashboard-page">
-    <div class="grid-layout">
+    <div v-if="loading" class="dashboard-skeleton">
+      <div v-for="i in 3" :key="i" style="margin-bottom: 16px;">
+        <el-skeleton :rows="3" animated />
+      </div>
+    </div>
+    <div v-else class="grid-layout">
       <div
         v-for="block in orderedBlocks"
         :key="block.id"
@@ -19,39 +24,6 @@
       </div>
     </div>
   </div>
-
-  <!-- 各区块模板 -->
-  <teleport to="body">
-    <div style="display: none">
-      <!-- 欢迎卡片 -->
-      <div id="block-welcome">
-        <div class="welcome-card">
-          <div class="welcome-left">
-            <h1 class="welcome-title">{{ greeting }}<span v-if="user">，{{ user.nickname || user.username }}</span></h1>
-            <p class="welcome-sub">欢迎使用 CodeXray，开始你的代码分析之旅</p>
-          </div>
-          <div class="welcome-right">
-            <div class="quick-row">
-              <el-input
-                v-model="quickUrl"
-                placeholder="输入 GitHub 仓库地址，快速开始分析..."
-                size="large"
-                clearable
-                @keyup.enter="startQuickAnalyze"
-              >
-                <template #prefix>
-                  <el-icon><Link /></el-icon>
-                </template>
-              </el-input>
-              <el-button type="primary" size="large" :disabled="!quickUrl" @click="startQuickAnalyze">
-                开始分析
-              </el-button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </teleport>
 </template>
 
 <script setup>
@@ -61,6 +33,7 @@ import { ElMessage } from 'element-plus'
 import { listTasks } from '../api/analysis'
 import { getTodayTrending } from '../api/trending'
 import { getStatusInfo, shortenUrl } from '../utils/status'
+import { formatNumber, formatRelative } from '../utils/format'
 import {
   List, CircleCheck, TrendCharts, Search, ChatDotRound, Platform,
   ArrowRight, Link
@@ -72,6 +45,7 @@ const recentTasks = ref([])
 const allTasks = ref([])
 const hotRepos = ref([])
 const user = ref(null)
+const loading = ref(false)
 
 const quickActions = [
   { path: '/analyze', label: '仓库分析', desc: '输入仓库地址，深度分析代码', icon: Search, bg: '#f0fdf4', color: '#2da44e' },
@@ -339,21 +313,6 @@ function onDrop(e, targetId) {
 }
 
 // ========== 工具函数 ==========
-function formatNumber(n) {
-  const num = parseInt(n) || 0
-  if (num >= 1000) return (num / 1000).toFixed(1) + 'k'
-  return String(num)
-}
-
-function formatRelative(dateStr) {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  const diffMs = Date.now() - d
-  if (diffMs < 60000) return '刚刚'
-  if (diffMs < 3600000) return Math.floor(diffMs / 60000) + ' 分钟前'
-  if (diffMs < 86400000) return Math.floor(diffMs / 3600000) + ' 小时前'
-  return Math.floor(diffMs / 86400000) + ' 天前'
-}
 
 function startQuickAnalyze() {
   if (!quickUrl.value) return
@@ -370,13 +329,18 @@ function loadUser() {
 async function reloadDashboard() {
   loadUser()
   loadOrder()
-  const [tasks, repos] = await Promise.all([
-    listTasks(200).catch(() => []),
-    getTodayTrending().catch(() => [])
-  ])
-  allTasks.value = tasks || []
-  recentTasks.value = (tasks || []).slice(0, 5)
-  hotRepos.value = (repos || []).slice(0, 5)
+  loading.value = true
+  try {
+    const [tasks, repos] = await Promise.all([
+      listTasks(5).catch(() => []),
+      getTodayTrending().catch(() => [])
+    ])
+    allTasks.value = tasks || []
+    recentTasks.value = (tasks || []).slice(0, 5)
+    hotRepos.value = (repos || []).slice(0, 5)
+  } finally {
+    loading.value = false
+  }
 }
 
 function onAuthChange(e) {

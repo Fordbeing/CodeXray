@@ -134,6 +134,39 @@ public class VectorStoreService {
     }
 
     /**
+     * 按类别过滤搜索：不使用向量相似度，仅通过类别和关键词过滤获取代码切片。
+     * 用于分析阶段按分类提取代码，而非语义搜索。
+     */
+    public List<CodeChunkDoc> searchByCategory(String taskId, String category, int topK) {
+        try {
+            SearchResponse<CodeChunkDoc> response = client.search(s -> s
+                            .index(INDEX_NAME)
+                            .size(topK)
+                            .query(q -> q
+                                    .bool(b -> {
+                                        b.must(m -> m.term(t -> t.field("task_id").value(taskId)));
+                                        if (category != null && !category.isBlank()) {
+                                            b.filter(f -> f.term(t -> t.field("category").value(category)));
+                                        }
+                                        return b;
+                                    })
+                            ),
+                    CodeChunkDoc.class
+            );
+
+            List<CodeChunkDoc> results = new ArrayList<>();
+            for (Hit<CodeChunkDoc> hit : response.hits().hits()) {
+                CodeChunkDoc doc = hit.source();
+                if (doc != null) results.add(doc);
+            }
+            return results;
+        } catch (Exception e) {
+            log.error("Category search failed", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
      * 全文检索：按关键词搜索代码切片（符号名、内容）。
      */
     public List<CodeChunkDoc> searchText(String taskId, String query, int topK) {

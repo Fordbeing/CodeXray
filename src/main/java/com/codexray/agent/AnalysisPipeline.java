@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -141,14 +142,42 @@ public class AnalysisPipeline {
             Path root = Path.of(repoPath);
             String objectName = "repos/" + taskId + "/archive.tar.gz";
 
+            // 创建 tar.gz 归档，包含实际文件内容
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            try (GZIPOutputStream gos = new GZIPOutputStream(baos);
-                 ObjectOutputStream oos = new ObjectOutputStream(gos)) {
-                List<String> files = Files.walk(root)
+            try (GZIPOutputStream gos = new GZIPOutputStream(baos)) {
+                List<Path> files = Files.walk(root)
                         .filter(Files::isRegularFile)
-                        .map(p -> root.relativize(p).toString())
                         .toList();
-                oos.writeObject(files);
+                for (Path file : files) {
+                    String entryName = root.relativize(file).toString().replace('\\', '/');
+                    byte[] content = Files.readAllBytes(file);
+
+                    // 写入 tar header (512 bytes)
+                    byte[] header = new byte[512];
+                    writeTarString(header, 0, 100, entryName);
+                    writeTarOctal(header, 100, 8, 0644L); // mode
+                    writeTarOctal(header, 108, 8, 0L);     // uid
+                    writeTarOctal(header, 116, 8, 0L);     // gid
+                    writeTarOctal(header, 124, 12, content.length);
+                    writeTarOctal(header, 136, 12, System.currentTimeMillis() / 1000);
+                    header[156] = '0'; // regular file
+
+                    // 计算 checksum
+                    long checksum = 0;
+                    for (int i = 0; i < 512; i++) checksum += (header[i] & 0xFF);
+                    for (int i = 0; i < 8; i++) header[148 + i] = (byte) ' ';
+                    writeTarOctal(header, 148, 7, checksum);
+
+                    gos.write(header);
+
+                    // 写入文件内容
+                    gos.write(content);
+                    // tar block 对齐到 512 字节
+                    int remainder = content.length % 512;
+                    if (remainder > 0) {
+                        gos.write(new byte[512 - remainder]);
+                    }
+                }
             }
 
             minioService.upload(objectName, baos.toByteArray(), "application/gzip");
@@ -156,5 +185,19 @@ public class AnalysisPipeline {
         } catch (Exception e) {
             log.warn("Failed to upload repo to MinIO: {}", e.getMessage());
         }
+    }
+
+    private static void writeTarString(byte[] header, int offset, int length, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        int len = Math.min(bytes.length, length - 1);
+        System.arraycopy(bytes, 0, header, offset, len);
+    }
+
+    private static void writeTarOctal(byte[] header, int offset, int length, long value) {
+        String octal = Long.toOctalString(value);
+        byte[] bytes = octal.getBytes(StandardCharsets.UTF_8);
+        int len = Math.min(bytes.length, length - 1);
+        System.arraycopy(bytes, 0, header, offset + length - 1 - len, len);
+        header[offset + length - 1] = 0;
     }
 }

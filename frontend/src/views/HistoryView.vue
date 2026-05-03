@@ -192,9 +192,13 @@ function goChat(row) {
 }
 
 async function handleDelete(taskId) {
-  await deleteTask(taskId)
-  ElMessage.success('已删除')
-  await loadTasks()
+  try {
+    await deleteTask(taskId)
+    ElMessage.success('已删除')
+    await loadTasks()
+  } catch (e) {
+    ElMessage.error('删除失败：' + (e.message || '未知错误'))
+  }
 }
 
 function onAuthChange(e) {

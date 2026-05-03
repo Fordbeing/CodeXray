@@ -17,9 +17,15 @@ const routes = [
   }
 ]
 
+routes.push({ path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('../views/DashboardView.vue'), meta: { title: '404' } })
+
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.afterEach((to) => {
+  document.title = to.meta.title ? to.meta.title + ' - CodeXray' : 'CodeXray'
 })
 
 export default router
