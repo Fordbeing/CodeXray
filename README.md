@@ -109,11 +109,19 @@
 
 ### 仓库分析 — 评分雷达图 + 模块分析 + 改进建议
 
-<img width="1905" height="896" alt="仓库分析" src="https://github.com/user-attachments/assets/57bc5936-77c5-44ad-86ac-45c011a12dda" />
+<img width="1905" height="896" alt="仓库分析" src="https://github.com/user-attachments/assets/950f6105-0a21-4cce-a49d-b7dd4da95958" />
 
-### 代码问答 — RAG 对话（Markdown 渲染 + 代码高亮 + 流式输出）
+### 代码问答 — RAG 对话（秒级响应 + Markdown 渲染 + 代码高亮 + 流式输出）
 
 <img width="1905" height="896" alt="代码回答" src="https://github.com/user-attachments/assets/c305dcba-1ea3-4cee-8adf-db83640e4df1" />
+
+### AI代码审查 — git diff 审查 + 文件审查 + 审查历史
+
+<img width="1905" height="896" alt="AI代码审查" src="https://github.com/user-attachments/assets/8537603d-3802-40d6-895c-4f39e8b5a575" />
+
+### AI报告对比 — 新旧报告对比 + 对比历史
+
+<img width="1905" height="896" alt="报告对比" src="https://github.com/user-attachments/assets/e2f005ad-a49e-43b1-aef1-b8ec5d9848eb" />
 
 ### 热点推送 — GitHub Trending 卡片 + AI 中英文分析 + 语言分布
 
