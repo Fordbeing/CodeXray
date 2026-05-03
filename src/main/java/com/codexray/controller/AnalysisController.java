@@ -1,16 +1,26 @@
 package com.codexray.controller;
 
 import com.codexray.agent.ReporterAgent;
+import com.codexray.common.CurrentUser;
 import com.codexray.common.Result;
+import com.codexray.llm.LlmClient;
+import com.codexray.mapper.ComparisonRecordMapper;
 import com.codexray.model.dto.AnalyzeRequest;
 import com.codexray.model.dto.AnalysisResultResponse;
+import com.codexray.model.dto.ComparisonResult;
 import com.codexray.model.dto.RepoPreviewResponse;
+import com.codexray.model.entity.ComparisonRecord;
 import com.codexray.rag.VectorStoreService;
 import com.codexray.service.AnalysisService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.LocalDateTime;
 import java.util.*;
 
 @RestController
@@ -20,12 +30,19 @@ public class AnalysisController {
     private final AnalysisService analysisService;
     private final VectorStoreService vectorStoreService;
     private final ReporterAgent reporterAgent;
+    private final LlmClient llmClient;
+    private final ObjectMapper objectMapper;
+    private final ComparisonRecordMapper comparisonRecordMapper;
 
     public AnalysisController(AnalysisService analysisService, VectorStoreService vectorStoreService,
-                              ReporterAgent reporterAgent) {
+                              ReporterAgent reporterAgent, LlmClient llmClient, ObjectMapper objectMapper,
+                              ComparisonRecordMapper comparisonRecordMapper) {
         this.analysisService = analysisService;
         this.vectorStoreService = vectorStoreService;
         this.reporterAgent = reporterAgent;
+        this.llmClient = llmClient;
+        this.objectMapper = objectMapper;
+        this.comparisonRecordMapper = comparisonRecordMapper;
     }
 
     @PostMapping("/analyze")
@@ -172,5 +189,166 @@ public class AnalysisController {
                 .limit(limit)
                 .toList();
         return Result.ok(notifications);
+    }
+
+    /** 对比两次分析报告 */
+    @GetMapping("/compare")
+    public Result<ComparisonResult> compare(@RequestParam String taskA, @RequestParam String taskB) {
+        AnalysisResultResponse a = analysisService.getResult(taskA);
+        AnalysisResultResponse b = analysisService.getResult(taskB);
+        if (a.report() == null || b.report() == null) {
+            return Result.error("对比的报告尚未生成完成");
+        }
+
+        // 同仓库校验
+        if (a.repoUrl() != null && b.repoUrl() != null && !a.repoUrl().equals(b.repoUrl())) {
+            return Result.error("只能对比同一仓库的分析报告");
+        }
+
+        // 解析 score 计算真实 scoreDiff
+        int scoreA = parseScore(a.report());
+        int scoreB = parseScore(b.report());
+        int scoreDiff = scoreA > 0 && scoreB > 0 ? scoreB - scoreA : 0;
+
+        // 用 LLM 生成 markdown 格式的对比分析
+        String prompt = """
+                对比以下两次代码分析报告，生成 Markdown 格式的对比分析。
+
+                报告 A (task: %s):
+                %s
+
+                报告 B (task: %s):
+                %s
+
+                请严格按照以下 Markdown 格式输出：
+                ## 评分变化
+                （用表格展示各维度评分的前后对比）
+
+                ## 主要改进
+                （列出 B 相比 A 的具体改进点）
+
+                ## 新增风险
+                （列出 B 中新出现的问题或风险）
+
+                ## 总结
+                （一句话总结整体变化趋势）
+                """.formatted(taskA, truncate(a.report(), 2000), taskB, truncate(b.report(), 2000));
+
+        String comparison;
+        try {
+            comparison = llmClient.chatWithContext("你是代码分析对比助手，输出 Markdown 格式。", java.util.List.of(), prompt);
+        } catch (Exception e) {
+            comparison = "对比分析生成失败: " + e.getMessage();
+        }
+
+        ComparisonResult comparisonResult = new ComparisonResult(a, b, comparison, scoreDiff);
+
+        // 持久化保存
+        try {
+            ComparisonRecord record = new ComparisonRecord();
+            record.setComparisonId(UUID.randomUUID().toString().replace("-", "").substring(0, 16));
+            record.setUserId(CurrentUser.get());
+            record.setTaskA(taskA);
+            record.setTaskB(taskB);
+            record.setRepoUrl(a.repoUrl());
+            record.setResultJson(objectMapper.writeValueAsString(comparisonResult));
+            record.setScoreDiff(scoreDiff);
+            record.setCreatedAt(LocalDateTime.now());
+            comparisonRecordMapper.insert(record);
+        } catch (JsonProcessingException e) {
+            // 保存失败不影响返回
+        }
+
+        return Result.ok(comparisonResult);
+    }
+
+    /** 按 repoUrl 分组的已完成任务列表 */
+    @GetMapping("/compare/tasks")
+    public Result<List<Map<String, Object>>> compareTasks(@RequestParam(defaultValue = "50") int limit) {
+        List<AnalysisResultResponse> all = analysisService.listTasks(limit);
+        Map<String, List<AnalysisResultResponse>> grouped = new LinkedHashMap<>();
+        for (AnalysisResultResponse t : all) {
+            if (!"COMPLETED".equals(t.status()) || t.report() == null) continue;
+            String repo = t.repoUrl() != null ? t.repoUrl() : "unknown";
+            grouped.computeIfAbsent(repo, k -> new ArrayList<>()).add(t);
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (var entry : grouped.entrySet()) {
+            if (entry.getValue().size() < 2) continue; // 只返回有 2+ 次分析的仓库
+            Map<String, Object> group = new LinkedHashMap<>();
+            group.put("repoUrl", entry.getKey());
+            // 按时间排序
+            List<AnalysisResultResponse> sorted = entry.getValue().stream()
+                    .sorted(Comparator.comparing(AnalysisResultResponse::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+                    .toList();
+            group.put("tasks", sorted);
+            result.add(group);
+        }
+        return Result.ok(result);
+    }
+
+    /** 获取对比历史列表 */
+    @GetMapping("/compare/list")
+    public Result<List<Map<String, Object>>> listComparisonRecords(@RequestParam(defaultValue = "30") int limit) {
+        Long userId = CurrentUser.get();
+        QueryWrapper<ComparisonRecord> wrapper = new QueryWrapper<>();
+        if (userId != null) {
+            wrapper.eq("user_id", userId);
+        }
+        wrapper.orderByDesc("created_at")
+                .last("LIMIT " + Math.min(limit, 100));
+
+        List<ComparisonRecord> records = comparisonRecordMapper.selectList(wrapper);
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (ComparisonRecord r : records) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("comparisonId", r.getComparisonId());
+            m.put("repoUrl", r.getRepoUrl());
+            m.put("taskA", r.getTaskA());
+            m.put("taskB", r.getTaskB());
+            m.put("scoreDiff", r.getScoreDiff());
+            m.put("createdAt", r.getCreatedAt());
+            list.add(m);
+        }
+        return Result.ok(list);
+    }
+
+    /** 获取单条对比结果 */
+    @GetMapping("/compare/{comparisonId}")
+    public Result<ComparisonResult> getComparisonRecord(@PathVariable String comparisonId) {
+        QueryWrapper<ComparisonRecord> wrapper = new QueryWrapper<>();
+        wrapper.eq("comparison_id", comparisonId);
+        ComparisonRecord record = comparisonRecordMapper.selectOne(wrapper);
+        if (record == null) {
+            return Result.error("对比记录不存在");
+        }
+        try {
+            ComparisonResult result = objectMapper.readValue(record.getResultJson(), ComparisonResult.class);
+            return Result.ok(result);
+        } catch (Exception e) {
+            return Result.error("对比结果解析失败");
+        }
+    }
+
+    /** 删除对比记录 */
+    @DeleteMapping("/compare/{comparisonId}")
+    public Result<Void> deleteComparisonRecord(@PathVariable String comparisonId) {
+        QueryWrapper<ComparisonRecord> wrapper = new QueryWrapper<>();
+        wrapper.eq("comparison_id", comparisonId);
+        comparisonRecordMapper.delete(wrapper);
+        return Result.ok(null);
+    }
+
+    private int parseScore(String reportJson) {
+        try {
+            JsonNode root = objectMapper.readTree(reportJson);
+            return root.path("score").asInt(0);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private String truncate(String s, int maxLen) {
+        return s != null && s.length() > maxLen ? s.substring(0, maxLen) + "..." : (s != null ? s : "");
     }
 }

@@ -114,7 +114,7 @@ public class VectorStoreService {
                             .field("embedding")
                             .queryVector(toFloatList(queryVector))
                             .k((long) topK)
-                            .numCandidates((long) topK * 2)
+                            .numCandidates(Math.max((long) topK * 10, 100L))
                             .filter(f -> f.term(t -> t.field("task_id").value(taskId)))
                     );
 

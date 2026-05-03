@@ -29,6 +29,7 @@ public class EmbeddingService {
 
     private final SettingService settingService;
     private final ObjectMapper objectMapper;
+    private final EmbeddingCacheService cacheService;
 
     // 缓存 WebClient，配置变更时重建
     private WebClient cachedWebClient;
@@ -40,10 +41,12 @@ public class EmbeddingService {
     private long lastFailureTime = 0;
     private static final long RETRY_INTERVAL_MS = 60_000; // 1 分钟后重试
 
-    public EmbeddingService(SettingService settingService, ObjectMapper objectMapper) {
+    public EmbeddingService(SettingService settingService, ObjectMapper objectMapper,
+                             EmbeddingCacheService cacheService) {
         this.settingService = settingService;
         this.objectMapper = objectMapper;
-        log.info("EmbeddingService initialized (settings-driven)");
+        this.cacheService = cacheService;
+        log.info("EmbeddingService initialized (settings-driven, cache enabled)");
     }
 
     private String getEmbeddingUrl() {
@@ -123,6 +126,11 @@ public class EmbeddingService {
             text = text.substring(0, 8000);
         }
 
+        // 查询 Redis 缓存
+        String textHash = cacheService.hashText(text);
+        float[] cached = cacheService.get(textHash);
+        if (cached != null) return cached;
+
         // 检查是否可以恢复
         if (!apiAvailable && System.currentTimeMillis() - lastFailureTime > RETRY_INTERVAL_MS) {
             apiAvailable = true;
@@ -134,7 +142,9 @@ public class EmbeddingService {
             // 带一次重试：首次失败后等 500ms 重试一次
             for (int attempt = 0; attempt < 2; attempt++) {
                 try {
-                    return callEmbeddingApi(text);
+                    float[] vec = callEmbeddingApi(text);
+                    cacheService.put(textHash, vec);
+                    return vec;
                 } catch (Exception e) {
                     if (attempt == 0) {
                         log.warn("Embedding API attempt 1 failed, retrying: {}", e.getMessage());
@@ -155,10 +165,31 @@ public class EmbeddingService {
      * 批量生成 embedding。
      */
     public List<float[]> embedBatch(List<String> texts) {
-        List<float[]> results = new ArrayList<>();
+        List<float[]> results = new ArrayList<>(texts.size());
         for (int i = 0; i < texts.size(); i += 100) {
             int end = Math.min(i + 100, texts.size());
             List<String> batch = texts.subList(i, end);
+
+            // 逐条查缓存
+            List<Integer> missIdx = new ArrayList<>();
+            List<String> missTexts = new ArrayList<>();
+            float[][] tempResults = new float[batch.size()][];
+
+            for (int j = 0; j < batch.size(); j++) {
+                String hash = cacheService.hashText(batch.get(j));
+                float[] cached = cacheService.get(hash);
+                if (cached != null) {
+                    tempResults[j] = cached;
+                } else {
+                    missIdx.add(j);
+                    missTexts.add(batch.get(j));
+                }
+            }
+
+            if (missIdx.isEmpty()) {
+                for (float[] r : tempResults) results.add(r);
+                continue;
+            }
 
             if (!apiAvailable && System.currentTimeMillis() - lastFailureTime > RETRY_INTERVAL_MS) {
                 apiAvailable = true;
@@ -167,7 +198,13 @@ public class EmbeddingService {
             WebClient wc = getWebClient();
             if (apiAvailable && wc != null) {
                 try {
-                    results.addAll(callBatchEmbeddingApi(batch));
+                    List<float[]> apiResults = callBatchEmbeddingApi(missTexts);
+                    for (int k = 0; k < missIdx.size(); k++) {
+                        float[] vec = apiResults.get(k);
+                        cacheService.put(cacheService.hashText(missTexts.get(k)), vec);
+                        tempResults[missIdx.get(k)] = vec;
+                    }
+                    for (float[] r : tempResults) results.add(r);
                     continue;
                 } catch (Exception e) {
                     log.warn("Batch embedding API failed: {}", e.getMessage());
@@ -176,6 +213,7 @@ public class EmbeddingService {
                 }
             }
 
+            // fallback: hash embed for all
             for (String text : batch) {
                 results.add(hashEmbed(text));
             }
@@ -192,7 +230,7 @@ public class EmbeddingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(30))
+                .timeout(Duration.ofSeconds(15))
                 .block();
 
         try {
@@ -221,7 +259,7 @@ public class EmbeddingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(30))
+                .timeout(Duration.ofSeconds(15))
                 .block();
 
         try {

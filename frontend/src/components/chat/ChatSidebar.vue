@@ -28,6 +28,15 @@
           <div class="session-time">{{ formatTime(session.createdAt) }}</div>
         </div>
         <el-button
+          class="session-export"
+          size="small"
+          text
+          @click.stop="$emit('export', session.sessionId)"
+          title="导出 Markdown"
+        >
+          <el-icon :size="14"><Download /></el-icon>
+        </el-button>
+        <el-button
           class="session-delete"
           type="danger"
           size="small"
@@ -46,7 +55,7 @@
 </template>
 
 <script setup>
-import { Plus, Delete, Close } from '@element-plus/icons-vue'
+import { Plus, Delete, Close, Download } from '@element-plus/icons-vue'
 
 defineProps({
   sessions: { type: Array, default: () => [] },
@@ -55,7 +64,7 @@ defineProps({
   canCreate: { type: Boolean, default: false },
 })
 
-defineEmits(['switch', 'delete', 'new-session', 'close'])
+defineEmits(['switch', 'delete', 'new-session', 'close', 'export'])
 
 function formatRepoName(url) {
   if (!url) return '未知仓库'
@@ -123,7 +132,9 @@ function formatTime(timeStr) {
 
 .session-time { font-size: 11px; color: #8b949e; margin-top: 2px; }
 .session-delete { opacity: 0; transition: opacity 0.15s; }
+.session-export { opacity: 0; transition: opacity 0.15s; color: #656d76; }
 .session-item:hover .session-delete { opacity: 1; }
+.session-item:hover .session-export { opacity: 1; }
 .no-sessions { text-align: center; color: #8b949e; font-size: 13px; padding: 40px 16px; }
 .sidebar-overlay { display: none; }
 

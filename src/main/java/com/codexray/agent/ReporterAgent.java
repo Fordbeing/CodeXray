@@ -39,31 +39,56 @@ public class ReporterAgent {
         context.append("代码切片数: ").append(scanResult.chunkCount()).append("\n");
         context.append("顶层目录: ").append(String.join(", ", profile.topLevelDirs().keySet())).append("\n\n");
 
-        // 配置文件内容
+        // README 内容（如果有）
+        if (profile.configContents() != null) {
+            for (var entry : profile.configContents().entrySet()) {
+                if (entry.getKey().toLowerCase().contains("readme")) {
+                    context.append("## README\n");
+                    String readme = entry.getValue();
+                    if (readme.length() > 1000) readme = readme.substring(0, 1000) + "...";
+                    context.append(readme).append("\n\n");
+                    break;
+                }
+            }
+        }
+
+        // 配置文件列表
         if (!profile.configFiles().isEmpty()) {
             context.append("## 配置文件\n");
             context.append(String.join(", ", profile.configFiles())).append("\n\n");
         }
 
-        // 各模块详细分析
+        // 核心文件（按代码量排序）
+        if (scanResult.topFiles() != null && !scanResult.topFiles().isEmpty()) {
+            context.append("## 核心文件（按代码量排序）\n");
+            for (var f : scanResult.topFiles().stream().limit(15).toList()) {
+                context.append(f.path()).append(" (").append(f.lineCount()).append(" 行, ").append(f.category()).append(")\n");
+            }
+            context.append("\n");
+        }
+
+        // 各模块详细分析（截断长摘要以控制 token）
         context.append("## 各模块分析\n");
         for (AnalyzerAgent.ModuleAnalysis m : modules) {
             context.append("### ").append(m.category()).append(" (")
                     .append(m.fileCount()).append(" files, ")
                     .append(m.chunkCount()).append(" chunks)\n");
-            context.append(m.summary()).append("\n\n");
+            String summary = m.summary();
+            if (summary.length() > 600) summary = summary.substring(0, 600) + "...";
+            context.append(summary).append("\n\n");
         }
 
-        // 代表性代码片段（关键！让 LLM 看到实际代码）
+        // 代表性代码片段
         Map<String, List<String>> samples = scanResult.codeSamples();
         if (samples != null && !samples.isEmpty()) {
             context.append("## 代表性代码片段\n");
             int sampleCount = 0;
             for (Map.Entry<String, List<String>> entry : samples.entrySet()) {
-                if (sampleCount >= 8) break; // 最多展示 8 个样本
+                if (sampleCount >= 8) break;
                 for (String sample : entry.getValue()) {
                     if (sampleCount >= 8) break;
-                    context.append(sample).append("\n\n");
+                    String s = sample.length() > 500 ? sample.substring(0, 500) + "..." : sample;
+                    context.append(s).append("\n\n");
                     sampleCount++;
                 }
             }
@@ -79,8 +104,9 @@ public class ReporterAgent {
                     3. architecture 要基于实际的目录结构和代码组织方式描述
                     4. modules 的 description 要体现每个模块的具体业务逻辑
                     5. strengths 和 improvements 要针对这个具体项目提出，不要模板化
-                    6. verdict 要给出有洞察力的评价
-                    7. primaryLanguage 要准确反映主要编程语言
+                    6. securityRisks 要指出具体的安全隐患（如 SQL 注入风险、敏感信息暴露等）
+                    7. performanceNotes 要指出性能相关注意事项
+                    8. verdict 要给出有洞察力的评价
                     """;
 
             String prompt = "根据以下分析数据，生成一份详细的代码分析报告：\n\n"
@@ -98,10 +124,16 @@ public class ReporterAgent {
                     + "    \"structure\": 85,\n"
                     + "    \"documentation\": 70,\n"
                     + "    \"testing\": 60,\n"
-                    + "    \"dependencies\": 90\n"
+                    + "    \"dependencies\": 90,\n"
+                    + "    \"security\": 75,\n"
+                    + "    \"performance\": 70,\n"
+                    + "    \"maintainability\": 80\n"
                     + "  },\n"
                     + "  \"strengths\": [\"基于代码内容的具体优点\"],\n"
                     + "  \"improvements\": [\"基于代码内容的具体改进建议\"],\n"
+                    + "  \"securityRisks\": [\"具体的安全风险点\"],\n"
+                    + "  \"performanceNotes\": [\"具体的性能注意事项\"],\n"
+                    + "  \"keyDependencies\": [\"核心依赖及版本\"],\n"
                     + "  \"verdict\": \"一句话总结评价\"\n"
                     + "}\n"
                     + "只输出 JSON，不要其他内容。";

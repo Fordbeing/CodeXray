@@ -1,8 +1,11 @@
 package com.codexray.agent;
 
+import com.codexray.agent.plan.AnalysisStep;
+import com.codexray.agent.plan.AnalysisTaskPlan;
 import com.codexray.llm.LlmClient;
 import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.entity.AnalysisTask;
+import com.codexray.service.AnalysisEventService;
 import com.codexray.service.MinioService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,12 +40,15 @@ public class AnalysisPipeline {
     private final AnalysisTaskMapper taskMapper;
     private final MinioService minioService;
     private final LlmClient llmClient;
+    private final AnalysisEventService eventService;
+    private final PlannerAgent plannerAgent;
     private final ExecutorService vtExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public AnalysisPipeline(ScannerAgent scannerAgent, IndexerAgent indexerAgent,
                             AnalyzerAgent analyzerAgent, ReporterAgent reporterAgent,
                             AnalysisTaskMapper taskMapper, MinioService minioService,
-                            LlmClient llmClient) {
+                            LlmClient llmClient, AnalysisEventService eventService,
+                            PlannerAgent plannerAgent) {
         this.scannerAgent = scannerAgent;
         this.indexerAgent = indexerAgent;
         this.analyzerAgent = analyzerAgent;
@@ -50,6 +56,8 @@ public class AnalysisPipeline {
         this.taskMapper = taskMapper;
         this.minioService = minioService;
         this.llmClient = llmClient;
+        this.eventService = eventService;
+        this.plannerAgent = plannerAgent;
     }
 
     /**
@@ -58,43 +66,89 @@ public class AnalysisPipeline {
      */
     public void execute(String taskId, Long dbId, String repoPath, String repoUrl) {
         try {
-            // 前置检查：验证 AI 模型可用
-            updateStatus(dbId, "CHECKING");
-            try {
-                llmClient.testConnection();
-                log.info("AI pre-flight check passed for task: {}", taskId);
-            } catch (Exception e) {
-                log.error("AI pre-flight check failed for task {}: {}", taskId, e.getMessage());
-                AnalysisTask task = new AnalysisTask();
-                task.setId(dbId);
-                task.setStatus("FAILED");
-                task.setErrorMessage("AI 模型连接失败: " + e.getMessage() + "。请在「系统设置」中检查 AI 配置后重试。");
-                task.setUpdatedAt(LocalDateTime.now());
-                taskMapper.updateById(task);
-                return;
-            }
-
-            // Stage 1 + 2 并行执行（虚拟线程）
+            // Stage 1 + 2 + AI 检查并行执行（虚拟线程）
             updateStatus(dbId, "SCANNING");
+            publishEvent(taskId, "status", "SCANNING");
+            publishEvent(taskId, "progress", 10);
+
+            Future<Boolean> aiCheckFuture = vtExecutor.submit(() -> {
+                try {
+                    llmClient.testConnection();
+                    log.info("AI pre-flight check passed for task: {}", taskId);
+                    return true;
+                } catch (Exception e) {
+                    log.error("AI pre-flight check failed for task {}: {}", taskId, e.getMessage());
+                    return false;
+                }
+            });
+
             Future<ScannerAgent.ScanResult> scanFuture = vtExecutor.submit(
                     () -> scannerAgent.scan(taskId, repoPath));
 
             Future<IndexerAgent.ProjectProfile> indexFuture = vtExecutor.submit(
                     () -> indexerAgent.index(repoPath));
 
+            // 检查 AI 连接（与扫描并行，不增加延迟）
+            try {
+                if (!aiCheckFuture.get(30, TimeUnit.SECONDS)) {
+                    AnalysisTask task = new AnalysisTask();
+                    task.setId(dbId);
+                    task.setStatus("FAILED");
+                    task.setErrorMessage("AI 模型连接失败。请在「系统设置」中检查 AI 配置后重试。");
+                    task.setUpdatedAt(LocalDateTime.now());
+                    taskMapper.updateById(task);
+                    return;
+                }
+            } catch (Exception e) {
+                log.warn("AI check timed out, proceeding with analysis: {}", e.getMessage());
+            }
+
             ScannerAgent.ScanResult scanResult = scanFuture.get(5, TimeUnit.MINUTES);
             log.info("Phase 1 done: {} files, {} chunks", scanResult.fileCount(), scanResult.chunkCount());
+            publishEvent(taskId, "message", "已扫描 " + scanResult.fileCount() + " 个文件，生成 " + scanResult.chunkCount() + " 个代码切片");
+            publishEvent(taskId, "progress", 30);
 
             IndexerAgent.ProjectProfile profile = indexFuture.get(5, TimeUnit.MINUTES);
             log.info("Phase 2 done: techStack={}", profile.techStack());
+            publishEvent(taskId, "message", "技术栈识别完成: " + profile.techStack());
+            publishEvent(taskId, "progress", 40);
 
-            // Stage 3: ANALYZING（虚拟线程并行分析各 category）
+            // Stage 3: ANALYZING — 使用 PlannerAgent 生成动态执行计划
             updateStatus(dbId, "ANALYZING");
-            List<AnalyzerAgent.ModuleAnalysis> modules = analyzerAgent.analyzeParallel(taskId, vtExecutor);
+            publishEvent(taskId, "status", "ANALYZING");
+            publishEvent(taskId, "progress", 45);
+
+            AnalysisTaskPlan plan = plannerAgent.createPlan(profile);
+            log.info("Planner generated plan ({} steps): {}", plan.steps().size(), plan.rationale());
+            publishEvent(taskId, "message", "执行计划: " + plan.rationale());
+
+            // 从计划中提取 analyzer 类别（如有指定）
+            List<String> analyzerCategories = plan.steps().stream()
+                    .filter(s -> "analyzer".equals(s.agentName()))
+                    .findFirst()
+                    .map(s -> {
+                        @SuppressWarnings("unchecked")
+                        List<String> cats = (List<String>) s.params().get("categories");
+                        return cats;
+                    })
+                    .orElse(null);
+
+            publishEvent(taskId, "progress", 50);
+            List<AnalyzerAgent.ModuleAnalysis> modules;
+            if (analyzerCategories != null && !analyzerCategories.isEmpty()) {
+                log.info("Running analyzer with planned categories: {}", analyzerCategories);
+                modules = analyzerAgent.analyzeParallel(taskId, vtExecutor, analyzerCategories);
+            } else {
+                modules = analyzerAgent.analyzeParallel(taskId, vtExecutor);
+            }
             log.info("Phase 3 done: {} modules analyzed", modules.size());
+            publishEvent(taskId, "message", "已分析 " + modules.size() + " 个模块");
+            publishEvent(taskId, "progress", 75);
 
             // Stage 4 + MinIO 上传并行
             updateStatus(dbId, "REPORTING");
+            publishEvent(taskId, "status", "REPORTING");
+            publishEvent(taskId, "progress", 80);
             Future<String> reportFuture = vtExecutor.submit(
                     () -> reporterAgent.generateReport(profile, modules, scanResult));
             Future<Void> uploadFuture = vtExecutor.submit(
@@ -102,6 +156,7 @@ public class AnalysisPipeline {
 
             String report = reportFuture.get(3, TimeUnit.MINUTES);
             log.info("Phase 4 done: report generated ({} chars)", report.length());
+            publishEvent(taskId, "progress", 95);
 
             try { uploadFuture.get(); } catch (Exception e) {
                 log.warn("MinIO upload failed: {}", e.getMessage());
@@ -115,6 +170,9 @@ public class AnalysisPipeline {
             task.setUpdatedAt(LocalDateTime.now());
             taskMapper.updateById(task);
 
+            publishEvent(taskId, "progress", 100);
+            publishEvent(taskId, "status", "COMPLETED");
+            eventService.completeAll(taskId);
             log.info("Analysis pipeline completed for task: {}", taskId);
 
         } catch (Exception e) {
@@ -125,6 +183,10 @@ public class AnalysisPipeline {
             task.setErrorMessage(e.getMessage());
             task.setUpdatedAt(LocalDateTime.now());
             taskMapper.updateById(task);
+
+            publishEvent(taskId, "status", "FAILED");
+            publishEvent(taskId, "error", e.getMessage());
+            eventService.completeAll(taskId);
         }
     }
 
@@ -134,6 +196,14 @@ public class AnalysisPipeline {
         task.setStatus(status);
         task.setUpdatedAt(LocalDateTime.now());
         taskMapper.updateById(task);
+    }
+
+    private void publishEvent(String taskId, String event, Object data) {
+        try {
+            eventService.publish(taskId, event, data);
+        } catch (Exception e) {
+            log.debug("Failed to publish SSE event for task {}: {}", taskId, e.getMessage());
+        }
     }
 
     /**

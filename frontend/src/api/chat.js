@@ -80,3 +80,8 @@ export function createChatSession(repoUrl, taskId) {
 export function deleteChatSession(sessionId) {
   return request.delete(`/chat/session/${sessionId}`)
 }
+
+/** 导出会话为 Markdown */
+export function exportChatSession(sessionId) {
+  return request.get(`/chat/session/${sessionId}/export`, { params: { format: 'md' } })
+}

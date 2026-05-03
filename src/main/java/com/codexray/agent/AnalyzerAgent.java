@@ -42,7 +42,13 @@ public class AnalyzerAgent {
      * 并行分析所有 category（虚拟线程）。
      */
     public List<ModuleAnalysis> analyzeParallel(String taskId, ExecutorService executor) {
-        List<String> categories = List.of("controller", "service", "model", "config", "data", "util", "source");
+        return analyzeParallel(taskId, executor, List.of("controller", "service", "model", "config", "data", "util", "source"));
+    }
+
+    /**
+     * 并行分析指定 category（虚拟线程）。
+     */
+    public List<ModuleAnalysis> analyzeParallel(String taskId, ExecutorService executor, List<String> categories) {
 
         List<Future<ModuleAnalysis>> futures = new ArrayList<>();
         for (String category : categories) {
