@@ -638,6 +638,7 @@ async function handleSend() {
     messages.value[pendingIndex].pending = false
     messages.value[pendingIndex].streaming = true
     let hlCount = 0
+    let tokenTimer = null
 
     for await (const event of stream) {
       if (event.type === 'session') {
@@ -650,10 +651,19 @@ async function handleSend() {
         scrollToBottomIfNear()
         hlCount++
         if (hlCount % 10 === 0) addCodeCopyButtons()
+        // 重置超时：每次收到新 token 都重置计时器
+        clearTimeout(tokenTimer)
+        tokenTimer = setTimeout(() => {
+          if (messages.value[pendingIndex]?.streaming) {
+            messages.value[pendingIndex].streaming = false
+            saveState()
+            nextTick(() => addCodeCopyButtons())
+          }
+        }, 1500)
       } else if (event.type === 'done') {
+        clearTimeout(tokenTimer)
         messages.value[pendingIndex].streaming = false
         saveState()
-        // 延迟执行非关键操作，不阻塞 UI 更新
         nextTick(() => {
           addCodeCopyButtons()
           loadSessions()
@@ -663,11 +673,19 @@ async function handleSend() {
           messages.value[pendingIndex].suggestions = JSON.parse(event.data)
         } catch { /* ignore */ }
       } else if (event.type === 'error') {
+        clearTimeout(tokenTimer)
         messages.value[pendingIndex].content = event.data
         messages.value[pendingIndex].error = true
         messages.value[pendingIndex].streaming = false
         saveState()
       }
+    }
+    // 流结束但没收到 done/error，也停止 streaming
+    clearTimeout(tokenTimer)
+    if (messages.value[pendingIndex]?.streaming) {
+      messages.value[pendingIndex].streaming = false
+      saveState()
+      nextTick(() => addCodeCopyButtons())
     }
   } catch (e) {
     // SSE 不可用，降级到轮询模式
