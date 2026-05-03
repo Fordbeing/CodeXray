@@ -1,50 +1,16 @@
 <template>
   <div class="chat-page">
     <!-- 会话侧边栏 -->
-    <div class="session-sidebar" :class="{ 'sidebar-open': sidebarOpen }">
-      <div class="sidebar-header">
-        <span class="sidebar-title">对话历史</span>
-        <div class="sidebar-actions">
-          <el-button type="primary" size="small" @click="handleNewSession" :disabled="!repoUrl.trim()">
-            <el-icon><Plus /></el-icon>
-            <span class="btn-text">新建</span>
-          </el-button>
-          <el-button class="sidebar-close-btn" size="small" text @click="sidebarOpen = false">
-            <el-icon :size="18"><Close /></el-icon>
-          </el-button>
-        </div>
-      </div>
-      <div class="session-list">
-        <div
-          v-for="session in sessions"
-          :key="session.sessionId"
-          :class="['session-item', { active: session.sessionId === currentSessionId }]"
-          @click="switchSession(session)"
-        >
-          <div class="session-info">
-            <div class="session-repo">
-              {{ formatRepoName(session.repoUrl) }}
-              <el-tag v-if="session.taskId" size="small" type="success" effect="light" style="margin-left: 4px">RAG</el-tag>
-            </div>
-            <div class="session-preview">{{ session.firstQuestion || '新对话' }}</div>
-            <div class="session-time">{{ formatTime(session.createdAt) }}</div>
-          </div>
-          <el-button
-            class="session-delete"
-            type="danger"
-            size="small"
-            text
-            @click.stop="handleDeleteSession(session.sessionId)"
-          >
-            <el-icon><Delete /></el-icon>
-          </el-button>
-        </div>
-        <div v-if="sessions.length === 0" class="no-sessions">
-          暂无对话记录
-        </div>
-      </div>
-    </div>
-    <div class="sidebar-overlay" v-if="sidebarOpen" @click="sidebarOpen = false"></div>
+    <ChatSidebar
+      :sessions="sessions"
+      :current-session-id="currentSessionId"
+      :sidebar-open="sidebarOpen"
+      :can-create="!!repoUrl.trim()"
+      @switch="switchSession"
+      @delete="handleDeleteSession"
+      @new-session="handleNewSession"
+      @close="sidebarOpen = false"
+    />
 
     <!-- 主对话区 -->
     <div class="chat-main">
@@ -153,7 +119,9 @@
 import { ref, computed, nextTick, onMounted, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ChatDotRound, Plus, Expand, Close, Link, Connection, Cpu, User } from '@element-plus/icons-vue'
 import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult } from '../api/chat'
+import ChatSidebar from '../components/chat/ChatSidebar.vue'
 import { marked } from 'marked'
 
 marked.setOptions({
@@ -241,6 +209,13 @@ onMounted(async () => {
   }
 
   window.addEventListener('auth-change', onAuthChange)
+
+  // 事件委托：代码块复制按钮（v-html 内的按钮无法用 Vue 绑定）
+  messagesRef.value?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.code-copy-btn')
+    if (btn) copyCode(btn)
+  })
+
   nextTick(() => addCodeCopyButtons())
 })
 
@@ -308,12 +283,33 @@ function resumePolls() {
 
 function startPolling(pollId, messageIndex) {
   if (activePolls.has(pollId)) {
-    clearInterval(activePolls.get(pollId).timer)
+    const existing = activePolls.get(pollId)
+    if (existing.timer) clearInterval(existing.timer)
   }
 
-  const timer = setInterval(async () => {
+  let pollCount = 0
+  const MAX_POLLS = 500
+  let failCount = 0
+
+  const doPoll = async () => {
+    pollCount++
+    if (pollCount >= MAX_POLLS) {
+      clearInterval(timer)
+      activePolls.delete(pollId)
+      if (messages.value[messageIndex]) {
+        messages.value[messageIndex].content = messages.value[messageIndex]?.content || '（响应超时，请重试）'
+        messages.value[messageIndex].streaming = false
+        messages.value[messageIndex].pending = false
+        messages.value[messageIndex].error = true
+      }
+      ElMessage.warning('对话响应超时')
+      saveState()
+      return
+    }
+
     try {
       const result = await getChatResult(pollId)
+      failCount = 0 // 重置失败计数
 
       // 结果已过期（用户离开期间后端已完成并清理），从 API 重新加载
       if (!result) {
@@ -334,7 +330,7 @@ function startPolling(pollId, messageIndex) {
           messages.value[messageIndex].content = result.content || ''
           messages.value[messageIndex].streaming = true
           messages.value[messageIndex].pending = false
-          scrollToBottom()
+          scrollToBottomIfNear()
         }
         saveState()
         return
@@ -357,14 +353,31 @@ function startPolling(pollId, messageIndex) {
           }
         }
         saveState()
-        scrollToBottom()
-        nextTick(() => addCodeCopyButtons())
-        loadSessions()
+        scrollToBottomIfNear()
+        loadSessions().then(() => nextTick(() => addCodeCopyButtons()))
       }
     } catch (e) {
+      failCount++
       console.error('轮询失败:', e)
+      if (failCount >= 5) {
+        clearInterval(timer)
+        activePolls.delete(pollId)
+        if (messages.value[messageIndex]) {
+          messages.value[messageIndex].content = '（网络异常，响应获取失败）'
+          messages.value[messageIndex].error = true
+        }
+        ElMessage.error('对话响应获取失败')
+        saveState()
+      }
     }
-  }, 800)
+
+    // 指数退避：800ms → ~5s 上限
+    clearInterval(timer)
+    const delay = Math.min(800 * Math.pow(1.5, Math.min(pollCount, 10)), 5000)
+    timer = setInterval(doPoll, delay)
+  }
+
+  let timer = setInterval(doPoll, 800)
 
   activePolls.set(pollId, { timer, messageIndex })
 }
@@ -416,6 +429,7 @@ async function switchSession(session) {
     messages.value = (history || []).map(h => ({ role: h.role, content: h.content }))
     saveState()
     await scrollToBottom()
+    nextTick(() => addCodeCopyButtons())
   } catch (e) {
     console.error('加载历史失败:', e)
     messages.value = []
@@ -521,24 +535,8 @@ async function handleSend() {
   }
 }
 
-function formatRepoName(url) {
-  if (!url) return '未知仓库'
-  const match = url.match(/github\.com\/([^/]+\/[^/]+)/)
-  return match ? match[1] : url.length > 30 ? url.slice(0, 30) + '...' : url
-}
-
-function formatTime(timeStr) {
-  if (!timeStr) return ''
-  const d = new Date(timeStr)
-  const diffMs = Date.now() - d
-  if (diffMs < 60000) return '刚刚'
-  if (diffMs < 3600000) return Math.floor(diffMs / 60000) + '分钟前'
-  if (diffMs < 86400000) return Math.floor(diffMs / 3600000) + '小时前'
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
-}
-
 let _scrollTimer = null
-async function scrollToBottom() {
+function scrollToBottom() {
   if (_scrollTimer) return
   _scrollTimer = requestAnimationFrame(() => {
     _scrollTimer = null
@@ -546,6 +544,17 @@ async function scrollToBottom() {
       messagesRef.value.scrollTo({ top: messagesRef.value.scrollHeight, behavior: 'smooth' })
     }
   })
+}
+
+// 判断用户是否正在看底部（距离底部 < 80px），只有在底部时才自动滚
+function isNearBottom() {
+  if (!messagesRef.value) return true
+  const el = messagesRef.value
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80
+}
+
+function scrollToBottomIfNear() {
+  if (isNearBottom()) scrollToBottom()
 }
 
 async function copyMessage(text) {
@@ -558,7 +567,9 @@ async function copyMessage(text) {
 }
 
 async function copyCode(btn) {
-  const pre = btn.closest('pre')
+  const wrapper = btn.closest('.code-block-wrapper')
+  if (!wrapper) return
+  const pre = wrapper.querySelector('pre')
   if (!pre) return
   const code = pre.querySelector('code')
   const text = code ? code.textContent : pre.textContent
@@ -585,7 +596,6 @@ function addCodeCopyButtons() {
     const btn = document.createElement('button')
     btn.className = 'code-copy-btn'
     btn.textContent = '复制'
-    btn.addEventListener('click', () => copyCode(btn))
     const header = document.createElement('div')
     header.className = 'code-block-header'
     const lang = pre.querySelector('code')?.className?.match(/language-(\w+)/)?.[1]

@@ -217,6 +217,7 @@ import { Search, CloseBold, CopyDocument, CircleCheck, Message, Refresh } from '
 import { getTodayTrending, getTrendingByDate, refreshTrending, subscribeEmail, unsubscribeEmail } from '../api/trending'
 import { marked } from 'marked'
 import ProfileDialog from '../components/ProfileDialog.vue'
+import { LANG_COLORS, formatNumber } from '../utils/format'
 
 const router = useRouter()
 
@@ -240,13 +241,6 @@ const currentUser = ref(null)
 const showEmailBindHint = ref(false)
 const showProfile = ref(false)
 
-const LANG_COLORS = {
-  JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
-  Go: '#00ADD8', Rust: '#dea584', 'C++': '#f34b7d', C: '#555555', 'C#': '#178600',
-  Ruby: '#701516', PHP: '#4F5D95', Swift: '#F05138', Kotlin: '#A97BFF', Dart: '#00B4AB',
-  Shell: '#89e051', HTML: '#e34c26', CSS: '#563d7c', Vue: '#41b883', Zig: '#ec915c',
-}
-
 function langColor(lang) {
   return LANG_COLORS[lang] || '#656d76'
 }
@@ -256,13 +250,6 @@ function rankClass(i) {
   if (i === 1) return 'rank-silver'
   if (i === 2) return 'rank-bronze'
   return ''
-}
-
-function formatNumber(n) {
-  const num = parseInt(n) || 0
-  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'm'
-  if (num >= 1000) return (num / 1000).toFixed(1) + 'k'
-  return String(num)
 }
 
 const langStats = computed(() => {

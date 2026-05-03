@@ -40,7 +40,7 @@
           <div class="user-detail">
             <div class="user-name">{{ user.nickname || user.username }}</div>
             <div class="user-meta" v-if="user.githubUsername">
-              <svg viewBox="0 0 16 16" width="12" height="12"><path fill="#656d76" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+              <GitHubIcon :size="12" />
               {{ user.githubUsername }}
             </div>
           </div>
@@ -67,16 +67,20 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  HomeFilled, Search, ChatDotRound, TrendCharts, List, Platform, Setting
+  HomeFilled, Search, ChatDotRound, TrendCharts, List, Platform, Setting,
+  SwitchButton, UserFilled
 } from '@element-plus/icons-vue'
 import { getMe } from '../api/auth'
+import { useAuthStore } from '../stores/auth'
 import AuthDialog from '../components/AuthDialog.vue'
 import ProfileDialog from '../components/ProfileDialog.vue'
+import GitHubIcon from '../components/icons/GitHubIcon.vue'
 
 defineProps({ visible: Boolean })
 defineEmits(['close'])
 
 const route = useRoute()
+const authStore = useAuthStore()
 const isMobile = ref(false)
 const user = ref(null)
 const showAuth = ref(false)
@@ -170,10 +174,13 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.3);
   z-index: 99;
   backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity 0.25s ease;
 }
 
 .sidebar-overlay.visible {
   display: block;
+  opacity: 1;
 }
 
 .sidebar {
@@ -262,6 +269,18 @@ onUnmounted(() => {
 .sidebar-footer {
   padding: 12px 14px;
   border-top: 1px solid #f0f2f5;
+}
+
+.sidebar-toggle {
+  padding: 4px 14px;
+}
+
+.dark-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 6px;
+  color: #656d76;
+  font-size: 13px;
 }
 
 /* 登录提示 */
@@ -365,5 +384,59 @@ onUnmounted(() => {
   .sidebar.collapsed {
     transform: translateX(-100%);
   }
+
+  .sidebar-overlay.visible {
+    transition: opacity 0.25s ease;
+  }
+}
+
+/* 暗色模式适配 */
+:global(html.dark) .sidebar {
+  background: #22272e;
+  border-right-color: #373e47;
+}
+
+:global(html.dark) .sidebar-logo {
+  border-bottom-color: #373e47;
+}
+
+:global(html.dark) .logo-name {
+  color: #e6edf3;
+}
+
+:global(html.dark) .nav-item {
+  color: #768390;
+}
+
+:global(html.dark) .nav-item:hover {
+  background: #2d333b;
+  color: #e6edf3;
+}
+
+:global(html.dark) .nav-item.active {
+  background: rgba(45, 164, 78, 0.15);
+  color: #2da44e;
+}
+
+:global(html.dark) .sidebar-footer {
+  border-top-color: #373e47;
+}
+
+:global(html.dark) .user-card {
+  background: #2d333b;
+}
+
+:global(html.dark) .user-name {
+  color: #e6edf3;
+}
+
+:global(html.dark) .login-prompt {
+  color: #e6edf3;
+  border-color: #444c56;
+}
+
+:global(html.dark) .login-prompt:hover {
+  background: rgba(45, 164, 78, 0.15);
+  border-color: #2da44e;
 }
 </style>

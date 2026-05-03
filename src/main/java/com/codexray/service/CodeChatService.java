@@ -152,6 +152,9 @@ public class CodeChatService {
 
         List<Map<String, String>> history = sessions.get(sessionId);
 
+        // 先将用户消息添加到历史，让 LLM 能看到当前问题
+        history.add(Map.of("role", "user", "content", question));
+
         String answer;
         if (taskId != null && !taskId.isBlank()) {
             answer = ragAnswer(taskId, question, history);
@@ -159,7 +162,6 @@ public class CodeChatService {
             answer = freeAnswer(repoUrl, question, history);
         }
 
-        history.add(Map.of("role", "user", "content", question));
         history.add(Map.of("role", "assistant", "content", answer));
 
         // 持久化

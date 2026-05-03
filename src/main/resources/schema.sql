@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS trending_repo (
     analysis_zh   TEXT,
     analysis_en   TEXT,
     trend_date    DATE          NOT NULL,
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_trend_date (trend_date)
 );
 
 CREATE TABLE IF NOT EXISTS chat_history (
@@ -35,17 +36,6 @@ CREATE TABLE IF NOT EXISTS chat_history (
     content       TEXT          NOT NULL,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_session (session_id),
-    INDEX idx_user (user_id)
-);
-
-CREATE TABLE IF NOT EXISTS chat_session (
-    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
-    session_id      VARCHAR(64)   NOT NULL UNIQUE,
-    user_id         BIGINT,
-    repo_url        VARCHAR(512),
-    task_id         VARCHAR(64),
-    first_question  VARCHAR(512),
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_user (user_id)
 );
 
@@ -68,7 +58,8 @@ CREATE TABLE IF NOT EXISTS code_chunk (
     content_hash  VARCHAR(64)   NOT NULL,
     chunk_index   INT           NOT NULL,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_task (task_id)
+    INDEX idx_task (task_id),
+    INDEX idx_task_category (task_id, category)
 );
 
 CREATE TABLE IF NOT EXISTS sys_user (

@@ -34,6 +34,9 @@ public class EmailController {
 
     @GetMapping("/subscribers")
     public Result<List<EmailSubscriber>> listSubscribers() {
+        if (!com.codexray.common.CurrentUser.isLoggedIn()) {
+            return Result.error("Unauthorized");
+        }
         return Result.ok(emailService.listSubscribers());
     }
 }

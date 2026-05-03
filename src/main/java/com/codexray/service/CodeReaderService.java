@@ -1,5 +1,6 @@
 package com.codexray.service;
 
+import com.codexray.common.Constants;
 import com.codexray.model.dto.RepoPreviewResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,11 +19,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class CodeReaderService {
 
     private static final Logger log = LoggerFactory.getLogger(CodeReaderService.class);
-
-    private static final Set<String> SKIP_DIRS = Set.of(
-            ".git", "node_modules", "target", "build", "dist", ".idea", ".vscode",
-            "__pycache__", ".gradle", ".mvn", "vendor", "venv", ".venv", "env"
-    );
 
     private static final Set<String> KEY_CONFIG_FILES = Set.of(
             "readme", "pom.xml", "build.gradle", "build.gradle.kts",
@@ -112,7 +108,7 @@ public class CodeReaderService {
         tree.append(indent).append(name).append("/\n");
 
         List<Path> entries = Files.list(dir)
-                .filter(p -> !SKIP_DIRS.contains(p.getFileName().toString()))
+                .filter(p -> !Constants.SKIP_DIRS.contains(p.getFileName().toString()))
                 .sorted(Comparator.comparing(p -> p.getFileName().toString()))
                 .limit(50)
                 .toList();
@@ -169,7 +165,7 @@ public class CodeReaderService {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    if (SKIP_DIRS.contains(dir.getFileName().toString())) {
+                    if (Constants.SKIP_DIRS.contains(dir.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;
@@ -245,7 +241,7 @@ public class CodeReaderService {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    if (SKIP_DIRS.contains(dir.getFileName().toString())) {
+                    if (Constants.SKIP_DIRS.contains(dir.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;

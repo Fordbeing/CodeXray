@@ -1,8 +1,10 @@
 package com.codexray.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.codexray.agent.AnalysisPipeline;
 import com.codexray.common.CurrentUser;
+import com.codexray.mapper.CodeChunkMapper;
 import com.codexray.mapper.AnalysisTaskMapper;
 import com.codexray.model.dto.AnalysisResultResponse;
 import com.codexray.model.dto.RepoPreviewResponse;
@@ -35,6 +37,7 @@ public class AnalysisService {
     private static final String RESULT_KEY_PREFIX = "codexray:result:";
 
     private final AnalysisTaskMapper taskMapper;
+    private final CodeChunkMapper codeChunkMapper;
     private final GitCloneService gitCloneService;
     private final CodeReaderService codeReaderService;
     private final AnalysisPipeline analysisPipeline;
@@ -43,11 +46,13 @@ public class AnalysisService {
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public AnalysisService(AnalysisTaskMapper taskMapper, GitCloneService gitCloneService,
+    public AnalysisService(AnalysisTaskMapper taskMapper, CodeChunkMapper codeChunkMapper,
+                           GitCloneService gitCloneService,
                            CodeReaderService codeReaderService, AnalysisPipeline analysisPipeline,
                            VectorStoreService vectorStoreService, MinioService minioService,
                            RedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper) {
         this.taskMapper = taskMapper;
+        this.codeChunkMapper = codeChunkMapper;
         this.gitCloneService = gitCloneService;
         this.codeReaderService = codeReaderService;
         this.analysisPipeline = analysisPipeline;
@@ -246,13 +251,13 @@ public class AnalysisService {
 
     public List<AnalysisResultResponse> listTasks(int limit) {
         Long userId = CurrentUser.get();
+        Page<AnalysisTask> page = new Page<>(1, Math.min(limit, 100));
         QueryWrapper<AnalysisTask> wrapper = new QueryWrapper<AnalysisTask>();
         if (userId != null) {
             wrapper.eq("user_id", userId);
         }
-        wrapper.orderByDesc("created_at")
-                .last("LIMIT " + Math.min(limit, 100));
-        return taskMapper.selectList(wrapper).stream()
+        wrapper.orderByDesc("created_at");
+        return taskMapper.selectPage(page, wrapper).getRecords().stream()
                 .map(t -> new AnalysisResultResponse(
                         t.getTaskId(), t.getRepoUrl(), t.getStatus(),
                         t.getReport(), t.getErrorMessage(),
@@ -274,7 +279,17 @@ public class AnalysisService {
             log.warn("Failed to delete ES chunks for task {}: {}", taskId, e.getMessage());
         }
 
-        // 2. 删除 MinIO 归档文件
+        // 2. 删除 MySQL code_chunk 记录
+        try {
+            codeChunkMapper.delete(
+                    new QueryWrapper<com.codexray.model.entity.CodeChunk>().eq("task_id", taskId)
+            );
+            log.info("Deleted MySQL code_chunks for task: {}", taskId);
+        } catch (Exception e) {
+            log.warn("Failed to delete MySQL code_chunks for task {}: {}", taskId, e.getMessage());
+        }
+
+        // 3. 删除 MinIO 归档文件
         try {
             String objectName = "repos/" + taskId + "/archive.tar.gz";
             if (minioService.exists(objectName)) {
@@ -285,7 +300,7 @@ public class AnalysisService {
             log.warn("Failed to delete MinIO archive for task {}: {}", taskId, e.getMessage());
         }
 
-        // 3. 删除数据库记录
+        // 4. 删除数据库记录
         return taskMapper.delete(
                 new QueryWrapper<AnalysisTask>().eq("task_id", taskId)
         ) > 0;

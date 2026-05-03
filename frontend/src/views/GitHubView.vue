@@ -2,7 +2,7 @@
   <div class="github-page">
     <div class="page-header">
       <h1 class="page-title">
-        <svg viewBox="0 0 16 16" width="26" height="26" style="margin-right: 8px; vertical-align: -4px"><path fill="#1f2328" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+        <GitHubIcon :size="26" color="#1f2328" :style="{ marginRight: '8px', verticalAlign: '-4px' }" />
         我的 GitHub
       </h1>
       <div class="header-right">
@@ -25,7 +25,7 @@
       <div class="setup-row">
         <el-input v-model="ghInput" placeholder="GitHub 用户名" size="large" clearable @keyup.enter="loadGithub">
           <template #prefix>
-            <svg viewBox="0 0 16 16" width="14" height="14"><path fill="#656d76" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+            <GitHubIcon :size="14" />
           </template>
         </el-input>
         <el-button type="primary" size="large" :loading="ghLoading" @click="loadGithub">加载</el-button>
@@ -41,7 +41,7 @@
       <div class="setup-row">
         <el-input v-model="ghInput" placeholder="重新输入 GitHub 用户名" size="large" clearable @keyup.enter="loadGithub">
           <template #prefix>
-            <svg viewBox="0 0 16 16" width="14" height="14"><path fill="#656d76" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+            <GitHubIcon :size="14" />
           </template>
         </el-input>
         <el-button type="primary" size="large" :loading="ghLoading" @click="loadGithub">重新加载</el-button>
@@ -314,6 +314,9 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Location, Link, Clock, Loading, Platform, CircleClose, TrendCharts, CircleCheck, Refresh } from '@element-plus/icons-vue'
 import { getUserProfile, getUserRepos, getUserStarred } from '../api/github'
+import { LANG_COLORS, formatNumber } from '../utils/format'
+import GitHubIcon from '../components/icons/GitHubIcon.vue'
+import StarIcon from '../components/icons/StarIcon.vue'
 
 const user = ref(null)
 const ghInput = ref('')
@@ -332,23 +335,8 @@ const refreshing = ref(false)
 const starredLoading = ref(false)
 const repoPerPage = ref(30)
 
-const LANG_COLORS = {
-  JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
-  Go: '#00ADD8', Rust: '#dea584', 'C++': '#f34b7d', C: '#555555', 'C#': '#178600',
-  Ruby: '#701516', PHP: '#4F5D95', Swift: '#F05138', Kotlin: '#A97BFF', Dart: '#00B4AB',
-  Shell: '#89e051', HTML: '#e34c26', CSS: '#563d7c', Vue: '#41b883', Zig: '#ec915c',
-  'Jupyter Notebook': '#DA5B0B', Scala: '#c22d40', Lua: '#000080',
-}
-
 function langColor(lang) {
   return LANG_COLORS[lang] || '#8b949e'
-}
-
-function formatNumber(n) {
-  const num = parseInt(n) || 0
-  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'm'
-  if (num >= 1000) return (num / 1000).toFixed(1) + 'k'
-  return String(num)
 }
 
 function formatCacheTime(date) {
@@ -524,6 +512,7 @@ async function loadStarred() {
     ghStarred.value = await getUserStarred(ghUsername.value, 30)
   } catch (e) {
     ghStarred.value = []
+    ElMessage.warning('加载收藏仓库失败')
   } finally {
     starredLoading.value = false
   }

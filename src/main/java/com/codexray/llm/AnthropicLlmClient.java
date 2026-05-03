@@ -280,7 +280,7 @@ public class AnthropicLlmClient implements LlmClient {
                         .bodyValue(requestBody)
                         .retrieve()
                         .bodyToMono(String.class)
-                        .timeout(Duration.ofSeconds(180))
+                        .timeout(Duration.ofSeconds(60))
                         .block();
 
                 return extractContent(responseBody);

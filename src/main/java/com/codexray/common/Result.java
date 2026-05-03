@@ -22,6 +22,10 @@ public class Result<T> {
         return new Result<>(500, message, null);
     }
 
+    public static <T> Result<T> error(int code, String message) {
+        return new Result<>(code, message, null);
+    }
+
     public int getCode() { return code; }
     public void setCode(int code) { this.code = code; }
 

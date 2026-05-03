@@ -1,5 +1,6 @@
 package com.codexray.agent;
 
+import com.codexray.common.Constants;
 import com.codexray.llm.LlmClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,11 +18,6 @@ import java.util.*;
 public class IndexerAgent {
 
     private static final Logger log = LoggerFactory.getLogger(IndexerAgent.class);
-
-    private static final Set<String> SKIP_DIRS = Set.of(
-            ".git", "node_modules", "target", "build", "dist", ".idea", ".vscode",
-            "__pycache__", ".gradle", ".mvn", "vendor", "venv"
-    );
 
     private static final Set<String> CONFIG_FILES = Set.of(
             "pom.xml", "build.gradle", "build.gradle.kts", "package.json",
@@ -45,7 +41,7 @@ public class IndexerAgent {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    if (SKIP_DIRS.contains(dir.getFileName().toString())) {
+                    if (Constants.SKIP_DIRS.contains(dir.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;
@@ -71,7 +67,7 @@ public class IndexerAgent {
         Map<String, Integer> dirStats = new LinkedHashMap<>();
         try (var stream = Files.list(root)) {
             stream.filter(Files::isDirectory)
-                    .filter(d -> !SKIP_DIRS.contains(d.getFileName().toString()))
+                    .filter(d -> !Constants.SKIP_DIRS.contains(d.getFileName().toString()))
                     .forEach(d -> dirStats.put(d.getFileName().toString(), 0));
         } catch (IOException ignored) {}
 
