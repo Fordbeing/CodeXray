@@ -56,6 +56,10 @@
               <el-icon style="margin-right: 4px"><CopyDocument /></el-icon>
               复制
             </el-button>
+            <el-button size="small" @click="referenceToChat" text>
+              <el-icon style="margin-right: 4px"><ChatDotRound /></el-icon>
+              引用到问答
+            </el-button>
           </div>
           <div v-if="loadingFile" class="viewer-loading">
             <el-icon class="is-loading"><Loading /></el-icon>
@@ -72,11 +76,13 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Search, Loading, Folder, Document, CopyDocument } from '@element-plus/icons-vue'
+import { ArrowLeft, Search, Loading, Folder, Document, CopyDocument, ChatDotRound } from '@element-plus/icons-vue'
 import { getFileTree, getFileContent } from '../../api/analysis'
+import { useRouter } from 'vue-router'
 import hljs from 'highlight.js/lib/core'
 
 const route = useRoute()
+const router = useRouter()
 const taskId = computed(() => route.params.taskId)
 
 const treeData = ref([])
@@ -152,6 +158,15 @@ async function copyFileContent() {
   } catch {
     ElMessage.error('复制失败')
   }
+}
+
+function referenceToChat() {
+  if (!selectedFile.value || !fileContent.value) return
+  // 保存代码引用到 localStorage，ChatView 启动时读取
+  const ref = { file: selectedFile.value, content: fileContent.value.slice(0, 2000) }
+  localStorage.setItem('codexray_code_ref', JSON.stringify(ref))
+  router.push({ path: '/chat', query: { taskId: taskId.value } })
+  ElMessage.success('已引用，跳转到问答')
 }
 </script>
 

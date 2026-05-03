@@ -15,7 +15,7 @@
       </div>
       <div class="logo-actions">
         <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="9" class="notif-badge">
-          <button class="notif-btn" @click="showNotif = !showNotif" title="通知">
+          <button class="notif-btn" @click="dismissNotifications" title="通知">
             <el-icon :size="16"><Bell /></el-icon>
           </button>
         </el-badge>
@@ -196,10 +196,22 @@ function onAuthRequired() {
 async function loadNotifications() {
   try {
     const data = await getNotifications(5)
-    const newCount = data.filter(n => n.status === 'COMPLETED' || n.status === 'FAILED').length
+    const lastSeen = parseInt(localStorage.getItem('codexray_notif_seen') || '0')
     notifications.value = data
-    unreadCount.value = newCount
+    // 只统计上次查看之后的新通知
+    unreadCount.value = data.filter(n => {
+      const t = new Date(n.updatedAt || n.createdAt).getTime()
+      return t > lastSeen && (n.status === 'COMPLETED' || n.status === 'FAILED')
+    }).length
   } catch { /* ignore */ }
+}
+
+function dismissNotifications() {
+  showNotif.value = !showNotif.value
+  if (showNotif.value) {
+    unreadCount.value = 0
+    localStorage.setItem('codexray_notif_seen', String(Date.now()))
+  }
 }
 
 function goToTask(taskId) {

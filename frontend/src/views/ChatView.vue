@@ -248,6 +248,16 @@ onMounted(async () => {
 
   restoreState()
 
+  // 读取代码引用（从 CodeExplorer 传递过来）
+  try {
+    const refStr = localStorage.getItem('codexray_code_ref')
+    if (refStr) {
+      const ref = JSON.parse(refStr)
+      codeRefs.value.push(ref)
+      localStorage.removeItem('codexray_code_ref')
+    }
+  } catch { /* ignore */ }
+
   // 先加载会话列表
   await loadSessions()
 
@@ -512,8 +522,8 @@ async function autoEnterSession(url, taskId) {
   try {
     const result = await createChatSession(url, taskId)
     currentSessionId.value = result.sessionId
+    if (taskId) currentTaskId.value = taskId
     messages.value = []
-    await loadSessions()
     saveState()
   } catch (e) {
     ElMessage.error('创建会话失败: ' + (e.message || '未知错误'))
