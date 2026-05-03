@@ -67,24 +67,24 @@
               <el-icon v-else :size="20" color="#2da44e"><Cpu /></el-icon>
             </div>
             <div class="message-content">
-              <!-- 等待中：还没有任何内容 -->
-              <div v-if="msg.pending && !msg.streaming" class="message-text markdown-body">
-                <span class="loading-dots">
-                  <span></span><span></span><span></span>
-                </span>
-                <span class="pending-text">AI 正在思考中...</span>
+              <!-- 统一容器：避免 v-if 切换导致 DOM 重建闪烁 -->
+              <div class="message-text markdown-body"
+                :class="{ 'streaming-msg': msg.streaming, 'error-text': msg.error }">
+                <!-- 等待中 -->
+                <div v-show="msg.pending && !msg.streaming">
+                  <span class="loading-dots">
+                    <span></span><span></span><span></span>
+                  </span>
+                  <span class="pending-text">AI 正在思考中...</span>
+                </div>
+                <!-- 错误 -->
+                <div v-show="msg.error">{{ msg.content }}</div>
+                <!-- 正常内容（流式 + 完成共用，不会重建） -->
+                <div v-show="!msg.pending || msg.streaming">
+                  <div v-html="cachedMd(msg)"></div>
+                  <span v-show="msg.streaming" class="stream-cursor"></span>
+                </div>
               </div>
-              <!-- 流式输出中：有内容 + 光标 -->
-              <div v-else-if="msg.streaming" class="message-text markdown-body streaming-msg">
-                <div v-html="renderMd(msg.content)"></div>
-                <span class="stream-cursor"></span>
-              </div>
-              <!-- 错误 -->
-              <div v-else-if="msg.error" class="message-text markdown-body error-text">
-                {{ msg.content }}
-              </div>
-              <!-- 完成 -->
-              <div v-else class="message-text markdown-body" v-html="renderMd(msg.content)"></div>
               <!-- 消息操作栏 -->
               <div v-if="!msg.pending && !msg.streaming && !msg.error && msg.content" class="message-actions">
                 <button class="action-btn" @click="copyMessage(msg.content)" title="复制内容">
@@ -102,7 +102,6 @@
               </div>
             </div>
           </div>
-          <div class="scroll-anchor"></div>
         </div>
 
         <!-- 代码引用区 -->
@@ -127,7 +126,7 @@
             :placeholder="currentSessionId ? '输入你的问题... (Enter 发送)' : '请先新建对话'"
             :disabled="!currentSessionId"
             resize="none"
-            @keyup.enter.exact="handleSend"
+            @keydown.enter.exact="onEnterDown"
           />
           <el-button type="primary" :loading="hasPending" :disabled="!canSend" @click="handleSend">
             发送
@@ -188,20 +187,59 @@ marked.setOptions({
   pedantic: false,
 })
 
-// Cache last parsed result to avoid re-parsing identical content on every poll tick
-let _lastMdInput = ''
-let _lastMdOutput = ''
-
-function renderMd(text) {
-  if (!text) return ''
-  if (text === _lastMdInput) return _lastMdOutput
-  try {
-    _lastMdOutput = marked.parse(text)
-  } catch {
-    _lastMdOutput = text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+// 每条消息独立缓存 Markdown 渲染结果，避免 v-html 重复替换 DOM
+function cachedMd(msg) {
+  if (!msg.content) {
+    msg._html = ''
+    return ''
   }
-  _lastMdInput = text
-  return _lastMdOutput
+  if (msg._html !== undefined && msg._raw === msg.content) return msg._html
+  try {
+    msg._html = marked.parse(msg.content)
+  } catch {
+    msg._html = msg.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+  }
+  msg._raw = msg.content
+  return msg._html
+}
+
+// 流式渲染节流：用 requestAnimationFrame 跟浏览器刷新周期同步，避免中间帧闪烁
+let _renderTimer = null
+let _pendingContent = ''
+let _pendingIndex = -1
+
+function flushRender(messages) {
+  _renderTimer = null
+  if (_pendingIndex < 0 || _pendingIndex >= messages.length) return
+  const wasAtBottom = isNearBottom()
+  messages[_pendingIndex].content = _pendingContent
+  // 内容更新 + 滚动在同一帧内完成，避免分步操作导致闪烁
+  if (wasAtBottom && messagesRef.value) {
+    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+  }
+}
+
+function scheduleRender(content, index, messages) {
+  _pendingContent = content
+  _pendingIndex = index
+  if (!_renderTimer) {
+    _renderTimer = requestAnimationFrame(() => flushRender(messages))
+  }
+}
+
+function flushRenderNow(messages) {
+  if (_renderTimer) {
+    cancelAnimationFrame(_renderTimer)
+    _renderTimer = null
+  }
+  if (_pendingIndex >= 0 && _pendingIndex < messages.length) {
+    const wasAtBottom = isNearBottom()
+    messages[_pendingIndex].content = _pendingContent
+    if (wasAtBottom && messagesRef.value) {
+      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+    }
+  }
+  _pendingIndex = -1
 }
 
 const route = useRoute()
@@ -418,9 +456,6 @@ function startPolling(pollId, messageIndex) {
           messages.value[messageIndex].streaming = true
           messages.value[messageIndex].pending = false
           scrollToBottomIfNear()
-          // 每 3 轮轮询高亮一次代码块
-          hlCount++
-          if (hlCount % 3 === 0) addCodeCopyButtons()
         }
         saveState()
         return
@@ -612,6 +647,12 @@ async function handleExportSession(sessionId) {
   }
 }
 
+// 输入法正在组字时，忽略 Enter 键（避免拼音还没选词就发送）
+function onEnterDown(e) {
+  if (e.isComposing) return
+  handleSend()
+}
+
 async function handleSend() {
   if (!canSend.value) return
 
@@ -637,23 +678,25 @@ async function handleSend() {
     const { stream } = await sendChatStream(repoUrl.value, fullQuestion, currentSessionId.value, currentTaskId.value)
     messages.value[pendingIndex].pending = false
     messages.value[pendingIndex].streaming = true
-    let hlCount = 0
+    let tokenCount = 0
+    let streamContent = ''
     let tokenTimer = null
 
     for await (const event of stream) {
       if (event.type === 'session') {
         if (!currentSessionId.value) {
           currentSessionId.value = event.data
-          await loadSessions()
+          loadSessions()
         }
       } else if (event.type === 'token') {
-        messages.value[pendingIndex].content += event.data
-        scrollToBottomIfNear()
-        hlCount++
-        if (hlCount % 10 === 0) addCodeCopyButtons()
-        // 重置超时：每次收到新 token 都重置计时器
+        streamContent += event.data
+        tokenCount++
+        // 节流：每 100ms 最多更新一次 DOM，滚动由 flushRender 同步处理
+        scheduleRender(streamContent, pendingIndex, messages.value)
+        // 重置超时：1.5s 无新 token 则自动停止 streaming
         clearTimeout(tokenTimer)
         tokenTimer = setTimeout(() => {
+          flushRenderNow(messages.value)
           if (messages.value[pendingIndex]?.streaming) {
             messages.value[pendingIndex].streaming = false
             saveState()
@@ -662,6 +705,7 @@ async function handleSend() {
         }, 1500)
       } else if (event.type === 'done') {
         clearTimeout(tokenTimer)
+        flushRenderNow(messages.value)
         messages.value[pendingIndex].streaming = false
         saveState()
         nextTick(() => {
@@ -674,6 +718,7 @@ async function handleSend() {
         } catch { /* ignore */ }
       } else if (event.type === 'error') {
         clearTimeout(tokenTimer)
+        flushRenderNow(messages.value)
         messages.value[pendingIndex].content = event.data
         messages.value[pendingIndex].error = true
         messages.value[pendingIndex].streaming = false
@@ -682,6 +727,7 @@ async function handleSend() {
     }
     // 流结束但没收到 done/error，也停止 streaming
     clearTimeout(tokenTimer)
+    flushRenderNow(messages.value)
     if (messages.value[pendingIndex]?.streaming) {
       messages.value[pendingIndex].streaming = false
       saveState()
@@ -720,7 +766,7 @@ function scrollToBottom() {
   _scrollTimer = requestAnimationFrame(() => {
     _scrollTimer = null
     if (messagesRef.value) {
-      messagesRef.value.scrollTo({ top: messagesRef.value.scrollHeight, behavior: 'smooth' })
+      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
     }
   })
 }
@@ -911,8 +957,7 @@ function addCodeCopyButtons() {
 
 /* ===== 聊天区 ===== */
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.chat-messages { flex: 1; overflow-y: auto; overflow-anchor: auto; padding: 16px 0; scroll-behavior: smooth; }
-.scroll-anchor { overflow-anchor: auto; height: 1px; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 16px 0; }
 
 .empty-chat {
   display: flex; flex-direction: column; align-items: center;
@@ -932,7 +977,7 @@ function addCodeCopyButtons() {
 .message.user .message-avatar { background: #f6f8fa; color: #656d76; }
 .message.assistant .message-avatar { background: #f0fdf4; }
 
-.message-content { max-width: 70%; transition: width 0.1s ease; }
+.message-content { max-width: 70%; }
 
 .message-text {
   padding: 10px 14px; border-radius: 10px;
@@ -949,6 +994,11 @@ function addCodeCopyButtons() {
   background: #1f2328; color: #e6edf3;
   padding: 12px 16px; border-radius: 8px;
   overflow-x: auto; margin: 8px 0;
+}
+
+.message-text :deep(pre code) {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .message-text :deep(pre code) { background: none; padding: 0; color: inherit; }
@@ -1039,8 +1089,17 @@ function addCodeCopyButtons() {
 .message-text :deep(.code-block-wrapper) {
   position: relative;
   margin: 8px 0;
-  border-radius: 8px;
-  overflow: hidden;
+}
+
+.message-text :deep(.code-block-header) {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
 }
 
 .message-text :deep(.code-block-header) {
@@ -1121,14 +1180,10 @@ function addCodeCopyButtons() {
 .stream-cursor {
   display: inline-block; width: 2px; height: 16px;
   background: #2da44e; margin-left: 2px; vertical-align: text-bottom;
-  animation: blink 1s infinite;
+  animation: blink 1s step-end infinite;
 }
 
-/* Streaming message - prevent layout thrash */
-.streaming-msg {
-  contain: layout style;
-  will-change: contents;
-}
+/* Streaming message */
 
 @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
 
