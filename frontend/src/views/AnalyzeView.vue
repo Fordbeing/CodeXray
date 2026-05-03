@@ -175,6 +175,24 @@
         <!-- 总结 -->
         <el-alert v-if="report.verdict" :title="report.verdict" type="success" :closable="false" show-icon />
 
+        <!-- 推荐问题 -->
+        <div v-if="suggestedQuestions.length" class="questions-section">
+          <h3>推荐问题</h3>
+          <div class="question-tags">
+            <el-tag
+              v-for="(q, i) in suggestedQuestions"
+              :key="i"
+              class="question-tag"
+              effect="plain"
+              type="success"
+              @click="askQuestion(q)"
+              style="cursor: pointer"
+            >
+              {{ q }}
+            </el-tag>
+          </div>
+        </div>
+
         <!-- 操作按钮 -->
         <div class="action-bar">
           <el-button @click="copyCloneUrl">
@@ -185,10 +203,18 @@
             <el-icon style="margin-right: 4px"><Link /></el-icon>
             打开 GitHub
           </el-button>
+          <el-button @click="exportReport">
+            <el-icon style="margin-right: 4px"><Download /></el-icon>
+            导出报告
+          </el-button>
         </div>
 
         <!-- 跳转问答 -->
         <div class="chat-jump">
+          <el-button @click="goToExplorer" size="large">
+            <el-icon style="margin-right: 4px"><FolderOpened /></el-icon>
+            浏览代码
+          </el-button>
           <el-button type="primary" size="large" @click="goToChat">
             <el-icon style="margin-right: 4px"><ChatDotRound /></el-icon>
             基于此分析进行代码问答
@@ -220,8 +246,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload, CopyDocument, Setting, RefreshRight, ChatDotRound } from '@element-plus/icons-vue'
-import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo } from '../api/analysis'
+import { Upload, CopyDocument, Setting, RefreshRight, ChatDotRound, Download, FolderOpened } from '@element-plus/icons-vue'
+import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo, getQuestions } from '../api/analysis'
 
 const route = useRoute()
 const router = useRouter()
@@ -237,6 +263,7 @@ const taskId = ref('')
 const taskStatus = ref('')
 const errorMessage = ref('')
 const report = ref(null)
+const suggestedQuestions = ref([])
 let pollTimer = null
 
 const scoreLabels = {
@@ -313,6 +340,7 @@ function startPolling() {
             report.value = { summary: result.report, score: 0 }
           }
         }
+        loadQuestions(taskId.value)
       } else if (result.status === 'FAILED') {
         stopPolling()
         errorMessage.value = result.errorMessage
@@ -354,6 +382,7 @@ onMounted(async () => {
         } catch {
           report.value = { summary: result.report, score: 0 }
         }
+        loadQuestions(pathTaskId)
       } else if (result.status === 'FAILED') {
         errorMessage.value = result.errorMessage
       } else {
@@ -371,6 +400,22 @@ onUnmounted(() => {
 
 function goToChat() {
   router.push({ path: '/chat', query: { repoUrl: repoUrl.value, taskId: taskId.value } })
+}
+
+function goToExplorer() {
+  router.push(`/explorer/${taskId.value}`)
+}
+
+async function loadQuestions(id) {
+  try {
+    suggestedQuestions.value = await getQuestions(id)
+  } catch {
+    suggestedQuestions.value = []
+  }
+}
+
+function askQuestion(question) {
+  router.push({ path: '/chat', query: { repoUrl: repoUrl.value, taskId: taskId.value, question } })
 }
 
 function handleFileChange(file) {
@@ -412,6 +457,49 @@ function handleRetry() {
   if (repoUrl.value) {
     handleAnalyze()
   }
+}
+
+function exportReport() {
+  if (!report.value) return
+  const r = report.value
+  let md = `# CodeXray 分析报告\n\n`
+  md += `**仓库**: ${repoUrl.value}\n\n`
+  if (r.summary) md += `## 项目概述\n\n${r.summary}\n\n`
+  if (r.primaryLanguage) md += `**主要语言**: ${r.primaryLanguage}\n\n`
+  if (r.techStack?.length) md += `**技术栈**: ${r.techStack.join(', ')}\n\n`
+  if (r.architecture) md += `**架构模式**: ${r.architecture}\n\n`
+  if (r.score != null) md += `## 综合评分: ${r.score}/100\n\n`
+  if (r.scoreDetails) {
+    md += `| 维度 | 评分 |\n|------|------|\n`
+    for (const [k, v] of Object.entries(r.scoreDetails)) {
+      md += `| ${scoreLabels[k] || k} | ${v} |\n`
+    }
+    md += '\n'
+  }
+  if (r.modules?.length) {
+    md += `## 模块结构\n\n| 模块 | 职责 |\n|------|------|\n`
+    r.modules.forEach(m => { md += `| ${m.name} | ${m.description} |\n` })
+    md += '\n'
+  }
+  if (r.strengths?.length) {
+    md += `## 优点\n\n`
+    r.strengths.forEach(s => { md += `- ${s}\n` })
+    md += '\n'
+  }
+  if (r.improvements?.length) {
+    md += `## 改进建议\n\n`
+    r.improvements.forEach(s => { md += `- ${s}\n` })
+    md += '\n'
+  }
+  if (r.verdict) md += `## 总结\n\n${r.verdict}\n`
+  const blob = new Blob([md], { type: 'text/markdown' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  const repoName = repoUrl.value.split('/').pop() || 'report'
+  a.download = `${repoName}-analysis.md`
+  a.click()
+  URL.revokeObjectURL(a.href)
+  ElMessage.success('报告已导出')
 }
 </script>
 
@@ -631,6 +719,37 @@ function handleRetry() {
   padding-top: 16px;
   border-top: 1px solid #e8ecf0;
   margin-top: 16px;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.questions-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e8ecf0;
+}
+
+.questions-section h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2328;
+  margin: 0 0 12px 0;
+}
+
+.question-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.question-tag {
+  font-size: 13px;
+  height: auto;
+  padding: 6px 12px;
+  white-space: normal;
+  max-width: 100%;
+  line-height: 1.5;
 }
 
 .error-section {

@@ -9,14 +9,17 @@
         <router-view />
       </div>
     </main>
+    <SearchPalette v-model:visible="searchVisible" />
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
 import AppSidebar from './AppSidebar.vue'
+import SearchPalette from '../components/SearchPalette.vue'
 
 const sidebarVisible = ref(true)
+const searchVisible = ref(false)
 </script>
 
 <style scoped>

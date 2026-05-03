@@ -7,10 +7,15 @@ import com.codexray.model.dto.ChatPending;
 import com.codexray.model.dto.ChatRequest;
 import com.codexray.model.dto.ChatResponse;
 import com.codexray.service.CodeChatService;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 代码问答 — 支持多轮对话、会话管理、异步轮询。
@@ -20,6 +25,7 @@ import java.util.Map;
 public class ChatController {
 
     private final CodeChatService codeChatService;
+    private final ExecutorService sseExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public ChatController(CodeChatService codeChatService) {
         this.codeChatService = codeChatService;
@@ -41,6 +47,28 @@ public class ChatController {
         String pollId = codeChatService.sendAsync(
                 request.sessionId(), request.repoUrl(), request.taskId(), request.question(), userId);
         return Result.ok(Map.of("pollId", pollId));
+    }
+
+    /** SSE 流式问答 */
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(
+            @RequestParam String question,
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(required = false) String repoUrl,
+            @RequestParam(required = false) String taskId) {
+        Long userId = CurrentUser.get();
+        SseEmitter emitter = new SseEmitter(120_000L);
+        sseExecutor.execute(() -> {
+            try {
+                codeChatService.askStreaming(sessionId, repoUrl, taskId, question, userId, emitter);
+            } catch (Exception e) {
+                try {
+                    emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
+                } catch (IOException ignored) {}
+                emitter.completeWithError(e);
+            }
+        });
+        return emitter;
     }
 
     /** 轮询异步结果 */

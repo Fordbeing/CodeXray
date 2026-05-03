@@ -13,6 +13,39 @@
         <span class="logo-name">CodeXray</span>
         <span class="logo-tag">AI Code Analysis</span>
       </div>
+      <div class="logo-actions">
+        <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="9" class="notif-badge">
+          <button class="notif-btn" @click="showNotif = !showNotif" title="通知">
+            <el-icon :size="16"><Bell /></el-icon>
+          </button>
+        </el-badge>
+      </div>
+    </div>
+
+    <!-- 通知面板 -->
+    <div v-if="showNotif" class="notif-panel">
+      <div class="notif-header">
+        <span>通知</span>
+        <el-button text size="small" @click="showNotif = false">
+          <el-icon><Close /></el-icon>
+        </el-button>
+      </div>
+      <div v-if="notifications.length === 0" class="notif-empty">暂无通知</div>
+      <div
+        v-for="n in notifications"
+        :key="n.taskId"
+        class="notif-item"
+        @click="goToTask(n.taskId)"
+      >
+        <el-icon :size="14" :color="n.status === 'COMPLETED' ? '#2da44e' : '#cf222e'">
+          <CircleCheck v-if="n.status === 'COMPLETED'" />
+          <CircleClose v-else />
+        </el-icon>
+        <div class="notif-info">
+          <div class="notif-title">{{ shortenUrl(n.repoUrl) }}</div>
+          <div class="notif-meta">{{ n.status === 'COMPLETED' ? '分析完成' : '分析失败' }}</div>
+        </div>
+      </div>
     </div>
 
     <nav class="sidebar-nav">
@@ -64,13 +97,15 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   HomeFilled, Search, ChatDotRound, TrendCharts, List, Platform, Setting,
-  SwitchButton, UserFilled
+  SwitchButton, UserFilled, Bell, Close, CircleCheck, CircleClose
 } from '@element-plus/icons-vue'
 import { getMe } from '../api/auth'
+import { getNotifications } from '../api/analysis'
+import { shortenUrl } from '../utils/status'
 import { useAuthStore } from '../stores/auth'
 import AuthDialog from '../components/AuthDialog.vue'
 import ProfileDialog from '../components/ProfileDialog.vue'
@@ -80,11 +115,16 @@ defineProps({ visible: Boolean })
 defineEmits(['close'])
 
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const isMobile = ref(false)
 const user = ref(null)
 const showAuth = ref(false)
 const showProfile = ref(false)
+const showNotif = ref(false)
+const notifications = ref([])
+const unreadCount = ref(0)
+let notifTimer = null
 
 const menuItems = [
   { path: '/', label: '仪表盘', icon: HomeFilled },
@@ -153,16 +193,33 @@ function onAuthRequired() {
   showAuth.value = true
 }
 
+async function loadNotifications() {
+  try {
+    const data = await getNotifications(5)
+    const newCount = data.filter(n => n.status === 'COMPLETED' || n.status === 'FAILED').length
+    notifications.value = data
+    unreadCount.value = newCount
+  } catch { /* ignore */ }
+}
+
+function goToTask(taskId) {
+  showNotif.value = false
+  router.push('/analyze/' + taskId)
+}
+
 onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
   window.addEventListener('auth-required', onAuthRequired)
   loadUser()
+  loadNotifications()
+  notifTimer = setInterval(loadNotifications, 30000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('auth-required', onAuthRequired)
+  if (notifTimer) clearInterval(notifTimer)
 })
 </script>
 
@@ -203,7 +260,59 @@ onUnmounted(() => {
   gap: 12px;
   padding: 20px 20px 18px;
   border-bottom: 1px solid #f0f2f5;
+  position: relative;
 }
+
+.logo-actions {
+  margin-left: auto;
+}
+
+.notif-badge :deep(.el-badge__content) {
+  border: none;
+}
+
+.notif-btn {
+  width: 32px; height: 32px; border-radius: 8px;
+  border: 1px solid #e8ecf0; background: #fff; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #656d76; transition: all 0.15s;
+}
+
+.notif-btn:hover { border-color: #2da44e; color: #2da44e; background: #f0fdf4; }
+
+/* 通知面板 */
+.notif-panel {
+  position: absolute; top: 60px; right: 12px; left: 12px;
+  background: #fff; border: 1px solid #d8dee4; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12); z-index: 200;
+  max-height: 300px; overflow-y: auto;
+}
+
+.notif-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-bottom: 1px solid #f0f2f5;
+  font-size: 13px; font-weight: 600; color: #1f2328;
+}
+
+.notif-empty {
+  text-align: center; padding: 24px; color: #8b949e; font-size: 13px;
+}
+
+.notif-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; cursor: pointer; transition: background 0.1s;
+  border-bottom: 1px solid #f6f8fa;
+}
+
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: #f6f8fa; }
+
+.notif-info { flex: 1; min-width: 0; }
+.notif-title {
+  font-size: 13px; color: #1f2328;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.notif-meta { font-size: 11px; color: #8b949e; margin-top: 2px; }
 
 .logo-icon {
   width: 36px;

@@ -70,7 +70,7 @@ const greeting = computed(() => {
 // ========== 区块定义 ==========
 const STORAGE_KEY = 'codexray_dashboard_layout'
 
-const defaultOrder = ['welcome', 'stats', 'recent', 'trending', 'actions']
+const defaultOrder = ['welcome', 'stats', 'recent', 'trending', 'actions', 'trend']
 
 const blockDefs = {
   welcome: { id: 'welcome', span: 12, spanSm: 12, spanXs: 12, component: null },
@@ -78,6 +78,7 @@ const blockDefs = {
   recent:  { id: 'recent',  span: 7,  spanSm: 12, spanXs: 12, component: null },
   trending:{ id: 'trending',span: 5,  spanSm: 6,  spanXs: 12, component: null },
   actions: { id: 'actions', span: 5,  spanSm: 6,  spanXs: 12, component: null },
+  trend:   { id: 'trend',   span: 12, spanSm: 12, spanXs: 12, component: null },
 }
 
 // 用渲染函数组件替代模板
@@ -234,6 +235,60 @@ const ActionsBlock = {
   },
 }
 
+// 最近 7 天分析趋势
+const weekDays = computed(() => {
+  const days = []
+  const now = new Date()
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const key = d.toISOString().slice(0, 10)
+    const label = ['日','一','二','三','四','五','六'][d.getDay()]
+    const count = allTasks.value.filter(t => t.createdAt && t.createdAt.startsWith(key)).length
+    days.push({ key, label, count })
+  }
+  return days
+})
+
+const maxDayCount = computed(() => Math.max(1, ...weekDays.value.map(d => d.count)))
+
+const TrendBlock = {
+  setup() {
+    return () => h('div', { class: 'section-card' }, [
+      h('div', { class: 'section-header' }, [
+        h('span', { class: 'section-title' }, '最近 7 天分析趋势'),
+      ]),
+      h('div', { class: 'trend-chart' },
+        weekDays.value.map(d => h('div', { class: 'trend-bar-wrap', key: d.key }, [
+          h('div', {
+            class: 'trend-bar',
+            style: `height: ${Math.max(4, d.count / maxDayCount.value * 80)}px`,
+            title: `${d.key}: ${d.count} 次`,
+          }),
+          h('div', { class: 'trend-count' }, String(d.count)),
+          h('div', { class: 'trend-day' }, '周' + d.label),
+        ]))),
+      // 未完成任务提示
+      allTasks.value.filter(t => !['COMPLETED', 'FAILED'].includes(t.status)).length > 0
+        ? h('div', { class: 'pending-section' }, [
+            h('div', { class: 'pending-title' }, '进行中的任务'),
+            ...allTasks.value
+              .filter(t => !['COMPLETED', 'FAILED'].includes(t.status))
+              .slice(0, 3)
+              .map(t => h('div', {
+                class: 'pending-item',
+                key: t.taskId,
+                onClick: () => router.push('/analyze/' + t.taskId),
+              }, [
+                h('span', { class: 'pending-url' }, shortenUrl(t.repoUrl)),
+                h('span', { class: 'status-tag warning' }, getStatusInfo(t.status).text),
+              ])),
+          ])
+        : null,
+    ])
+  },
+}
+
 // ========== 区块顺序 ==========
 const blockOrder = ref([...defaultOrder])
 
@@ -261,6 +316,7 @@ const componentMap = {
   recent: RecentBlock,
   trending: TrendingBlock,
   actions: ActionsBlock,
+  trend: TrendBlock,
 }
 
 const orderedBlocks = computed(() =>
@@ -576,6 +632,45 @@ onUnmounted(() => {
 .grid-item:deep(.action-info) { flex: 1; min-width: 0; }
 .grid-item:deep(.action-name) { font-size: 14px; font-weight: 700; color: #1f2328; }
 .grid-item:deep(.action-desc) { font-size: 12px; color: #8b949e; margin-top: 2px; }
+
+/* ===== 趋势图 ===== */
+.grid-item:deep(.trend-chart) {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 8px; height: 100px; padding: 0 8px;
+}
+.grid-item:deep(.trend-bar-wrap) {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.grid-item:deep(.trend-bar) {
+  width: 100%; max-width: 40px; border-radius: 4px 4px 0 0;
+  background: linear-gradient(180deg, #2da44e, #56d364);
+  transition: height 0.3s ease;
+  min-height: 4px;
+}
+.grid-item:deep(.trend-count) {
+  font-size: 11px; font-weight: 700; color: #1f2328;
+}
+.grid-item:deep(.trend-day) {
+  font-size: 11px; color: #8b949e;
+}
+
+/* ===== 未完成任务 ===== */
+.grid-item:deep(.pending-section) {
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid #f0f2f5;
+}
+.grid-item:deep(.pending-title) {
+  font-size: 13px; font-weight: 600; color: #656d76; margin-bottom: 8px;
+}
+.grid-item:deep(.pending-item) {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px; border-radius: 6px; cursor: pointer;
+  transition: background 0.15s;
+}
+.grid-item:deep(.pending-item:hover) { background: #f6f8fa; }
+.grid-item:deep(.pending-url) {
+  font-size: 13px; color: #1f2328; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ===== 响应式 ===== */
 @media (max-width: 1024px) {
