@@ -78,8 +78,9 @@ public class ScannerAgent {
         }
         vectorStoreService.storeChunks(taskId, esDocs);
 
-        // 存储到 MySQL（元数据）
+        // 存储到 MySQL（批量插入）
         log.info("ScannerAgent: saving metadata to MySQL");
+        List<CodeChunk> batch = new ArrayList<>(Math.min(rawChunks.size(), 100));
         for (int i = 0; i < rawChunks.size(); i++) {
             CodeChunker.Chunk chunk = rawChunks.get(i);
             CodeChunk entity = new CodeChunk();
@@ -92,8 +93,14 @@ public class ScannerAgent {
             entity.setContentHash(chunk.contentHash());
             entity.setChunkIndex(i);
             entity.setCreatedAt(LocalDateTime.now());
-            codeChunkMapper.insert(entity);
+            batch.add(entity);
+
+            if (batch.size() >= 100) {
+                for (CodeChunk c : batch) codeChunkMapper.insert(c);
+                batch.clear();
+            }
         }
+        for (CodeChunk c : batch) codeChunkMapper.insert(c);
 
         // 统计
         int fileCount = (int) rawChunks.stream().map(CodeChunker.Chunk::filePath).distinct().count();

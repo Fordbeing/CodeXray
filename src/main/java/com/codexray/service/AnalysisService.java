@@ -184,6 +184,7 @@ public class AnalysisService {
             }
         } catch (IOException ignored) {}
     }
+    @Async("analysisExecutor")
     public void asyncAnalyze(Long id, String taskId, String repoUrl) {
         String localPath = null;
         try {

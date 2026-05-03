@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -80,10 +82,10 @@ public class AnalysisPipeline {
             Future<IndexerAgent.ProjectProfile> indexFuture = vtExecutor.submit(
                     () -> indexerAgent.index(repoPath));
 
-            ScannerAgent.ScanResult scanResult = scanFuture.get();
+            ScannerAgent.ScanResult scanResult = scanFuture.get(5, TimeUnit.MINUTES);
             log.info("Phase 1 done: {} files, {} chunks", scanResult.fileCount(), scanResult.chunkCount());
 
-            IndexerAgent.ProjectProfile profile = indexFuture.get();
+            IndexerAgent.ProjectProfile profile = indexFuture.get(5, TimeUnit.MINUTES);
             log.info("Phase 2 done: techStack={}", profile.techStack());
 
             // Stage 3: ANALYZING（虚拟线程并行分析各 category）
@@ -98,7 +100,7 @@ public class AnalysisPipeline {
             Future<Void> uploadFuture = vtExecutor.submit(
                     () -> { uploadToMinio(taskId, repoPath); return null; });
 
-            String report = reportFuture.get();
+            String report = reportFuture.get(3, TimeUnit.MINUTES);
             log.info("Phase 4 done: report generated ({} chars)", report.length());
 
             try { uploadFuture.get(); } catch (Exception e) {

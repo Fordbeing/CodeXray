@@ -100,6 +100,7 @@ public class VectorStoreService {
             var searchBuilder = new SearchRequest.Builder()
                     .index(INDEX_NAME)
                     .size(topK)
+                    .source(s -> s.filter(f -> f.excludes("embedding")))
                     .query(q -> q
                             .bool(b -> {
                                 b.must(m -> m.term(t -> t.field("task_id").value(taskId)));
@@ -142,6 +143,7 @@ public class VectorStoreService {
             SearchResponse<CodeChunkDoc> response = client.search(s -> s
                             .index(INDEX_NAME)
                             .size(topK)
+                            .source(src -> src.filter(f -> f.excludes("embedding")))
                             .query(q -> q
                                     .bool(b -> {
                                         b.must(m -> m.term(t -> t.field("task_id").value(taskId)));
@@ -174,6 +176,7 @@ public class VectorStoreService {
             SearchResponse<CodeChunkDoc> response = client.search(s -> s
                             .index(INDEX_NAME)
                             .size(topK)
+                            .source(src -> src.filter(f -> f.excludes("embedding")))
                             .query(q -> q
                                     .bool(b -> b
                                             .must(m -> m.term(t -> t.field("task_id").value(taskId)))
