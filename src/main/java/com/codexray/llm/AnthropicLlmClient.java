@@ -278,8 +278,19 @@ public class AnthropicLlmClient implements LlmClient {
                 String responseBody = wc.post()
                         .uri("/v1/messages")
                         .bodyValue(requestBody)
-                        .retrieve()
-                        .bodyToMono(String.class)
+                        .exchangeToMono(response -> {
+                            if (response.statusCode().isError()) {
+                                return response.bodyToMono(String.class)
+                                        .defaultIfEmpty("")
+                                        .flatMap(body -> {
+                                            log.error("Anthropic API error {} — body: {}", response.statusCode().value(),
+                                                    body.substring(0, Math.min(1000, body.length())));
+                                            return reactor.core.publisher.Mono.error(
+                                                    new RuntimeException("Anthropic API " + response.statusCode().value() + ": " + body));
+                                        });
+                            }
+                            return response.bodyToMono(String.class);
+                        })
                         .timeout(Duration.ofSeconds(45))
                         .block();
 
@@ -321,8 +332,20 @@ public class AnthropicLlmClient implements LlmClient {
                 wc.post()
                         .uri("/v1/messages")
                         .bodyValue(requestBody)
-                        .retrieve()
-                        .bodyToFlux(String.class)
+                        .exchangeToFlux(response -> {
+                            if (response.statusCode().isError()) {
+                                return response.bodyToMono(String.class)
+                                        .defaultIfEmpty("")
+                                        .flatMapMany(body -> {
+                                            log.error("Anthropic API streaming error {} — body: {}",
+                                                    response.statusCode().value(),
+                                                    body.substring(0, Math.min(1000, body.length())));
+                                            return reactor.core.publisher.Flux.error(
+                                                    new RuntimeException("Anthropic API " + response.statusCode().value() + ": " + body));
+                                        });
+                            }
+                            return response.bodyToFlux(String.class);
+                        })
                         .timeout(Duration.ofSeconds(90))
                         .subscribe(
                                 data -> {
