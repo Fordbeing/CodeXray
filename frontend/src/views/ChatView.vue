@@ -261,16 +261,27 @@ onMounted(async () => {
   // 先加载会话列表
   await loadSessions()
 
-  // 从其他页面跳转过来（带 repoUrl），自动进入会话
+  // 从其他页面跳转过来（带 repoUrl 或有代码引用需要发送），自动进入会话
+  const hasCodeRef = codeRefs.value.length > 0
   if (fromRepoUrl) {
     await autoEnterSession(fromRepoUrl, fromTaskId)
-    // 如果带有推荐问题，自动发送
     if (fromQuestion) {
       question.value = fromQuestion
       await handleSend()
     }
-    // 清除 query 参数，防止重复触发
     router.replace({ path: route.path })
+  } else if (fromTaskId && hasCodeRef) {
+    // 从代码浏览器引用代码过来，需要通过 taskId 获取 repoUrl
+    try {
+      const { getAnalysisResult } = await import('../api/analysis')
+      const result = await getAnalysisResult(fromTaskId)
+      if (result.repoUrl) {
+        repoUrl.value = result.repoUrl
+        currentTaskId.value = fromTaskId
+        await autoEnterSession(result.repoUrl, fromTaskId)
+        router.replace({ path: route.path })
+      }
+    } catch { /* ignore */ }
   }
 
   window.addEventListener('auth-change', onAuthChange)
@@ -456,6 +467,13 @@ async function loadSessions() {
   try {
     // 始终加载当前用户的所有会话，不按 repoUrl 过滤
     sessions.value = await listChatSessions() || []
+
+    // 有活跃轮询或流式消息时，不要覆盖正在输出的消息
+    const hasActive = messages.value.some(m => m.pending || m.streaming)
+    if (hasActive) {
+      saveState()
+      return
+    }
 
     // 同步当前会话的消息：确保左侧列表和右侧消息一致
     if (currentSessionId.value) {
