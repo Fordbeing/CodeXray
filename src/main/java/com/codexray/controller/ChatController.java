@@ -37,7 +37,8 @@ public class ChatController {
         Long userId = CurrentUser.get();
         ChatMessage msg = codeChatService.ask(
                 request.sessionId(), request.repoUrl(), request.taskId(), request.question(), userId);
-        return Result.ok(new ChatResponse(msg.sessionId(), msg.content(), msg.timestamp().toString()));
+        List<String> suggestions = codeChatService.generateFollowUps(request.question(), msg.content());
+        return Result.ok(new ChatResponse(msg.sessionId(), msg.content(), msg.timestamp().toString(), suggestions));
     }
 
     /** 发送问答消息（异步） — 返回 pollId */
@@ -110,5 +111,12 @@ public class ChatController {
     public Result<Map<String, Boolean>> deleteSession(@PathVariable String sessionId) {
         codeChatService.deleteSession(sessionId);
         return Result.ok(Map.of("deleted", true));
+    }
+
+    /** 导出会话为 Markdown */
+    @GetMapping("/session/{sessionId}/export")
+    public Result<String> exportSession(@PathVariable String sessionId,
+                                        @RequestParam(defaultValue = "md") String format) {
+        return Result.ok(codeChatService.exportAsMarkdown(sessionId));
     }
 }

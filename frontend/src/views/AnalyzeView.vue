@@ -90,9 +90,13 @@
         <el-step title="AI 分析" />
         <el-step title="完成" />
       </el-steps>
+      <el-progress v-if="progress > 0" :percentage="progress" :stroke-width="8" style="margin: 16px 0 8px" />
       <div class="progress-hint">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>{{ progressText }}</span>
+      </div>
+      <div v-if="progressMessages.length > 0" class="progress-messages">
+        <div v-for="(msg, i) in progressMessages" :key="i" class="progress-msg">{{ msg }}</div>
       </div>
     </el-card>
 
@@ -172,6 +176,30 @@
           </ul>
         </div>
 
+        <!-- 安全风险 -->
+        <div v-if="report.securityRisks?.length" class="list-section">
+          <h3>安全风险</h3>
+          <ul class="danger-list">
+            <li v-for="(s, i) in report.securityRisks" :key="i">{{ s }}</li>
+          </ul>
+        </div>
+
+        <!-- 性能注意事项 -->
+        <div v-if="report.performanceNotes?.length" class="list-section">
+          <h3>性能注意事项</h3>
+          <ul class="info-list">
+            <li v-for="(s, i) in report.performanceNotes" :key="i">{{ s }}</li>
+          </ul>
+        </div>
+
+        <!-- 关键依赖 -->
+        <div v-if="report.keyDependencies?.length" class="list-section">
+          <h3>关键依赖</h3>
+          <div class="dep-tags">
+            <el-tag v-for="(d, i) in report.keyDependencies" :key="i" type="info" size="small" class="dep-tag">{{ d }}</el-tag>
+          </div>
+        </div>
+
         <!-- 总结 -->
         <el-alert v-if="report.verdict" :title="report.verdict" type="success" :closable="false" show-icon />
 
@@ -247,7 +275,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Upload, CopyDocument, Setting, RefreshRight, ChatDotRound, Download, FolderOpened } from '@element-plus/icons-vue'
-import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo, getQuestions } from '../api/analysis'
+import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo, getQuestions, subscribeToAnalysis } from '../api/analysis'
 
 const route = useRoute()
 const router = useRouter()
@@ -264,6 +292,8 @@ const taskStatus = ref('')
 const errorMessage = ref('')
 const report = ref(null)
 const suggestedQuestions = ref([])
+const progress = ref(0)
+const progressMessages = ref([])
 let pollTimer = null
 
 const scoreLabels = {
@@ -271,7 +301,10 @@ const scoreLabels = {
   structure: '项目结构',
   documentation: '文档',
   testing: '测试',
-  dependencies: '依赖管理'
+  dependencies: '依赖管理',
+  security: '安全性',
+  performance: '性能',
+  maintainability: '可维护性'
 }
 
 const stepActive = computed(() => {
@@ -317,14 +350,58 @@ async function handleAnalyze() {
     taskId.value = await analyzeRepo(repoUrl.value)
     taskStatus.value = 'PENDING'
     router.replace({ path: `/analyze/${taskId.value}` })
-    startPolling()
+    startSse()
   } finally {
     analyzing.value = false
   }
 }
 
+function startSse() {
+  stopSse()
+  progressMessages.value = []
+  progress.value = 0
+  const iter = subscribeToAnalysis(taskId.value)
+  ;(async () => {
+    try {
+      for await (const { event, data } of iter) {
+        if (event === 'status') {
+          taskStatus.value = data
+          if (data === 'COMPLETED') {
+            const result = await getAnalysisResult(taskId.value)
+            if (result.report) {
+              try { report.value = JSON.parse(result.report) }
+              catch { report.value = { summary: result.report, score: 0 } }
+            }
+            loadQuestions(taskId.value)
+            return
+          } else if (data === 'FAILED') {
+            return
+          }
+        } else if (event === 'progress') {
+          progress.value = typeof data === 'number' ? data : parseInt(data) || 0
+        } else if (event === 'message') {
+          progressMessages.value.push(data)
+        } else if (event === 'error') {
+          errorMessage.value = data
+        }
+      }
+    } catch {
+      startPolling() // SSE 断开 fallback 轮询
+    }
+  })()
+  pollTimer = iter
+}
+
+function stopSse() {
+  if (pollTimer && pollTimer.return) {
+    pollTimer.return()
+    pollTimer = null
+  }
+}
+
 function startPolling() {
-  stopPolling()
+  if (pollTimer && typeof pollTimer !== 'number') return
+  clearInterval(pollTimer)
   let failCount = 0
   pollTimer = setInterval(async () => {
     try {
@@ -332,34 +409,27 @@ function startPolling() {
       failCount = 0
       taskStatus.value = result.status
       if (result.status === 'COMPLETED') {
-        stopPolling()
+        clearInterval(pollTimer)
+        pollTimer = null
         if (result.report) {
-          try {
-            report.value = JSON.parse(result.report)
-          } catch {
-            report.value = { summary: result.report, score: 0 }
-          }
+          try { report.value = JSON.parse(result.report) }
+          catch { report.value = { summary: result.report, score: 0 } }
         }
         loadQuestions(taskId.value)
       } else if (result.status === 'FAILED') {
-        stopPolling()
+        clearInterval(pollTimer)
+        pollTimer = null
         errorMessage.value = result.errorMessage
       }
     } catch {
       failCount++
       if (failCount >= 5) {
-        stopPolling()
+        clearInterval(pollTimer)
+        pollTimer = null
         errorMessage.value = '获取分析状态失败，请刷新页面重试'
       }
     }
   }, 3000)
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
 }
 
 onMounted(async () => {
@@ -386,7 +456,7 @@ onMounted(async () => {
       } else if (result.status === 'FAILED') {
         errorMessage.value = result.errorMessage
       } else {
-        startPolling()
+        startSse()
       }
     } catch {
       // task not found
@@ -395,7 +465,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  stopPolling()
+  stopSse()
+  clearInterval(pollTimer)
 })
 
 function goToChat() {
@@ -430,7 +501,7 @@ async function handleUpload() {
     taskId.value = await uploadAndAnalyze(uploadFile.value)
     taskStatus.value = 'PENDING'
     router.replace({ path: `/analyze/${taskId.value}` })
-    startPolling()
+    startSse()
     uploadRef.value?.clearFiles()
     uploadFile.value = null
   } finally {
@@ -489,6 +560,21 @@ function exportReport() {
   if (r.improvements?.length) {
     md += `## 改进建议\n\n`
     r.improvements.forEach(s => { md += `- ${s}\n` })
+    md += '\n'
+  }
+  if (r.securityRisks?.length) {
+    md += `## 安全风险\n\n`
+    r.securityRisks.forEach(s => { md += `- ${s}\n` })
+    md += '\n'
+  }
+  if (r.performanceNotes?.length) {
+    md += `## 性能注意事项\n\n`
+    r.performanceNotes.forEach(s => { md += `- ${s}\n` })
+    md += '\n'
+  }
+  if (r.keyDependencies?.length) {
+    md += `## 关键依赖\n\n`
+    r.keyDependencies.forEach(d => { md += `- ${d}\n` })
     md += '\n'
   }
   if (r.verdict) md += `## 总结\n\n${r.verdict}\n`
@@ -632,6 +718,18 @@ function exportReport() {
   font-size: 14px;
 }
 
+.progress-messages {
+  margin-top: 12px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.progress-msg {
+  font-size: 12px;
+  color: #8b949e;
+  padding: 2px 0;
+}
+
 .score-section {
   text-align: center;
   margin-bottom: 32px;
@@ -699,7 +797,9 @@ function exportReport() {
 }
 
 .check-list,
-.warn-list {
+.warn-list,
+.danger-list,
+.info-list {
   margin: 0;
   padding-left: 20px;
 }
@@ -712,6 +812,26 @@ function exportReport() {
 .warn-list li {
   color: #d29922;
   margin-bottom: 6px;
+}
+
+.danger-list li {
+  color: #cf222e;
+  margin-bottom: 6px;
+}
+
+.info-list li {
+  color: #0969da;
+  margin-bottom: 6px;
+}
+
+.dep-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dep-tag {
+  font-size: 12px;
 }
 
 .chat-jump {

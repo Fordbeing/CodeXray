@@ -81,3 +81,30 @@ CREATE TABLE IF NOT EXISTS sys_setting (
     `value`       TEXT,
     updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS code_review_record (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    review_id       VARCHAR(64)   NOT NULL UNIQUE,
+    user_id         BIGINT,
+    input_type      VARCHAR(16)   NOT NULL,
+    diff_content    TEXT,
+    file_path       VARCHAR(1024),
+    source_task_id  VARCHAR(64),
+    result_json     TEXT,
+    score           INT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_review_user (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS comparison_record (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    comparison_id   VARCHAR(64)   NOT NULL UNIQUE,
+    user_id         BIGINT,
+    task_a          VARCHAR(64),
+    task_b          VARCHAR(64),
+    repo_url        VARCHAR(512),
+    result_json     TEXT,
+    score_diff      INT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_compare_user (user_id)
+);

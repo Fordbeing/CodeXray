@@ -48,3 +48,44 @@ export function getQuestions(taskId) {
 export function getNotifications(limit = 10) {
   return request.get('/analysis/notifications', { params: { limit } })
 }
+
+/**
+ * 订阅分析进度 SSE 流。
+ * 返回 { event, data } 异步迭代器。
+ */
+export async function* subscribeToAnalysis(taskId) {
+  const token = localStorage.getItem('codexray_token')
+  const baseUrl = request.defaults.baseURL || '/api'
+  const url = `${baseUrl}/analysis/${taskId}/stream`
+  const headers = {}
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const response = await fetch(url, { headers })
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    let currentEvent = 'message'
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        currentEvent = line.slice(6).trim()
+      } else if (line.startsWith('data:')) {
+        const data = line.slice(5).trim()
+        yield { event: currentEvent, data: tryParse(data) }
+        currentEvent = 'message'
+      }
+    }
+  }
+}
+
+function tryParse(str) {
+  try { return JSON.parse(str) } catch { return str }
+}

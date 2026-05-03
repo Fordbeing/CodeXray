@@ -46,7 +46,7 @@ public class ScannerAgent {
 
         if (rawChunks.isEmpty()) {
             log.warn("No chunks generated for repo: {}", repoPath);
-            return new ScanResult(0, 0, Map.of());
+            return new ScanResult(0, 0, Map.of(), List.of());
         }
 
         // 批量生成 Embedding
@@ -108,6 +108,8 @@ public class ScannerAgent {
 
         // 收集每个 category 的代表性代码片段（每个 category 最多 3 个 chunk）
         Map<String, List<String>> samplesByCategory = new LinkedHashMap<>();
+        // 统计每个文件的代码行数
+        Map<String, int[]> fileLineStats = new LinkedHashMap<>(); // [lineCount, chunkCount]
         for (CodeChunker.Chunk chunk : rawChunks) {
             String cat = chunk.category() != null ? chunk.category() : "source";
             samplesByCategory.computeIfAbsent(cat, k -> new ArrayList<>());
@@ -116,10 +118,27 @@ public class ScannerAgent {
                         chunk.filePath() + ":" + chunk.startLine() + "-" + chunk.endLine()
                                 + "\n```\n" + chunk.content() + "\n```");
             }
+            fileLineStats.computeIfAbsent(chunk.filePath(), k -> new int[2])[0] += chunk.endLine() - chunk.startLine() + 1;
+            fileLineStats.computeIfAbsent(chunk.filePath(), k -> new int[2])[1]++;
         }
 
-        return new ScanResult(fileCount, rawChunks.size(), samplesByCategory);
+        // Top 20 文件（按代码行数排序）
+        List<FileInfo> topFiles = fileLineStats.entrySet().stream()
+                .sorted((a, b) -> b.getValue()[0] - a.getValue()[0])
+                .limit(20)
+                .map(e -> {
+                    String cat = rawChunks.stream()
+                            .filter(c -> c.filePath().equals(e.getKey()))
+                            .findFirst()
+                            .map(c -> c.category() != null ? c.category() : "source")
+                            .orElse("source");
+                    return new FileInfo(e.getKey(), e.getValue()[0], cat);
+                })
+                .toList();
+
+        return new ScanResult(fileCount, rawChunks.size(), samplesByCategory, topFiles);
     }
 
-    public record ScanResult(int fileCount, int chunkCount, Map<String, List<String>> codeSamples) {}
+    public record FileInfo(String path, int lineCount, String category) {}
+    public record ScanResult(int fileCount, int chunkCount, Map<String, List<String>> codeSamples, List<FileInfo> topFiles) {}
 }

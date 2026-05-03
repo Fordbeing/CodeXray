@@ -9,6 +9,7 @@
       @switch="switchSession"
       @delete="handleDeleteSession"
       @new-session="handleNewSession"
+      @export="handleExportSession"
       @close="sidebarOpen = false"
     />
 
@@ -90,6 +91,15 @@
                   <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path fill="currentColor" d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
                 </button>
               </div>
+              <!-- 追问建议 -->
+              <div v-if="msg.suggestions && msg.suggestions.length > 0" class="suggestions">
+                <button
+                  v-for="(s, si) in msg.suggestions"
+                  :key="si"
+                  class="suggestion-btn"
+                  @click="askSuggestion(s)"
+                >{{ s }}</button>
+              </div>
             </div>
           </div>
           <div class="scroll-anchor"></div>
@@ -133,7 +143,7 @@ import { ref, computed, nextTick, onMounted, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Plus, Expand, Close, Link, Connection, Cpu, User } from '@element-plus/icons-vue'
-import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult, sendChatStream } from '../api/chat'
+import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult, sendChatStream, exportChatSession } from '../api/chat'
 import ChatSidebar from '../components/chat/ChatSidebar.vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js/lib/core'
@@ -430,6 +440,7 @@ function startPolling(pollId, messageIndex) {
           messages.value[messageIndex] = {
             role: 'assistant',
             content: result.content,
+            suggestions: result.suggestions || [],
           }
         }
         saveState()
@@ -585,6 +596,22 @@ async function handleDeleteSession(sessionId) {
   }
 }
 
+async function handleExportSession(sessionId) {
+  try {
+    const markdown = await exportChatSession(sessionId)
+    const blob = new Blob([markdown], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `codexray-chat-${sessionId.slice(0, 8)}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('已导出')
+  } catch (e) {
+    ElMessage.error('导出失败: ' + (e.message || '未知错误'))
+  }
+}
+
 async function handleSend() {
   if (!canSend.value) return
 
@@ -628,6 +655,10 @@ async function handleSend() {
         saveState()
         await loadSessions()
         nextTick(() => addCodeCopyButtons())
+      } else if (event.type === 'suggestions') {
+        try {
+          messages.value[pendingIndex].suggestions = JSON.parse(event.data)
+        } catch { /* ignore */ }
       } else if (event.type === 'error') {
         messages.value[pendingIndex].content = event.data
         messages.value[pendingIndex].error = true
@@ -721,19 +752,31 @@ function addCodeRef(file, content, line) {
   }
   codeRefs.value.push({ file, content: content.slice(0, 2000), line })
 }
+
+function askSuggestion(s) {
+  question.value = s
+  handleSend()
+}
 window.__addCodeRef = addCodeRef
 
 function addCodeCopyButtons() {
   if (!messagesRef.value) return
   const pres = messagesRef.value.querySelectorAll('.message-text pre')
   pres.forEach(pre => {
-    // 语法高亮（每次内容更新都需要重新高亮）
+    // 已经被 wrapper 包裹过，跳过（避免流式输出时重复创建）
+    if (pre.parentNode?.classList?.contains('code-block-wrapper')) {
+      // 但仍需做语法高亮（内容可能已更新）
+      const codeEl = pre.querySelector('code')
+      if (codeEl && !codeEl.dataset.highlighted) {
+        hljs.highlightElement(codeEl)
+      }
+      return
+    }
+    // 语法高亮
     const codeEl = pre.querySelector('code')
     if (codeEl && !codeEl.dataset.highlighted) {
       hljs.highlightElement(codeEl)
     }
-    // 复制按钮（只需添加一次）
-    if (pre.querySelector('.code-copy-btn')) return
     const wrapper = document.createElement('div')
     wrapper.className = 'code-block-wrapper'
     const btn = document.createElement('button')
@@ -741,7 +784,7 @@ function addCodeCopyButtons() {
     btn.textContent = '复制'
     const header = document.createElement('div')
     header.className = 'code-block-header'
-    const lang = pre.querySelector('code')?.className?.match(/language-(\w+)/)?.[1]
+    const lang = codeEl?.className?.match(/language-(\w+)/)?.[1]
     if (lang) {
       const langSpan = document.createElement('span')
       langSpan.className = 'code-lang'
@@ -1172,5 +1215,35 @@ function addCodeCopyButtons() {
 
 @media (min-width: 768px) and (max-width: 1024px) {
   .session-sidebar { width: 220px; min-width: 220px; }
+}
+
+/* 追问建议 */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.suggestion-btn {
+  padding: 6px 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 16px;
+  background: #fff;
+  color: #0969da;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestion-btn:hover {
+  background: #f0fdf4;
+  border-color: #2da44e;
+  color: #2da44e;
 }
 </style>

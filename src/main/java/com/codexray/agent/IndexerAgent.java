@@ -74,7 +74,7 @@ public class IndexerAgent {
         // 调用 LLM 识别技术栈
         String techStack = identifyTechStack(configs);
 
-        return new ProjectProfile(techStack, configs.keySet().stream().toList(), dirStats);
+        return new ProjectProfile(techStack, configs.keySet().stream().toList(), dirStats, configs);
     }
 
     private String identifyTechStack(Map<String, String> configs) {
@@ -105,6 +105,7 @@ public class IndexerAgent {
     public record ProjectProfile(
             String techStack,
             List<String> configFiles,
-            Map<String, Integer> topLevelDirs
+            Map<String, Integer> topLevelDirs,
+            Map<String, String> configContents
     ) {}
 }

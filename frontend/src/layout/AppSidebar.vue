@@ -101,7 +101,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   HomeFilled, Search, ChatDotRound, TrendCharts, List, Platform, Setting,
-  SwitchButton, UserFilled, Bell, Close, CircleCheck, CircleClose
+  SwitchButton, UserFilled, Bell, Close, CircleCheck, CircleClose,
+  View, DataAnalysis
 } from '@element-plus/icons-vue'
 import { getMe } from '../api/auth'
 import { getNotifications } from '../api/analysis'
@@ -130,6 +131,8 @@ const menuItems = [
   { path: '/', label: '仪表盘', icon: HomeFilled },
   { path: '/analyze', label: '仓库分析', icon: Search },
   { path: '/chat', label: '代码问答', icon: ChatDotRound },
+  { path: '/review', label: 'AI 代码审查', icon: View },
+  { path: '/compare', label: '报告对比', icon: DataAnalysis },
   { path: '/trending', label: '热点推送', icon: TrendCharts },
   { path: '/github', label: '我的 GitHub', icon: Platform },
   { path: '/history', label: '分析历史', icon: List },

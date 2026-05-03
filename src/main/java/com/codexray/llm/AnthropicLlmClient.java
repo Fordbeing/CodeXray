@@ -280,7 +280,7 @@ public class AnthropicLlmClient implements LlmClient {
                         .bodyValue(requestBody)
                         .retrieve()
                         .bodyToMono(String.class)
-                        .timeout(Duration.ofSeconds(60))
+                        .timeout(Duration.ofSeconds(45))
                         .block();
 
                 return extractContent(responseBody);
@@ -291,7 +291,7 @@ public class AnthropicLlmClient implements LlmClient {
                     throw new RuntimeException("LLM API call failed: " + e.getMessage(), e);
                 }
                 try {
-                    Thread.sleep(1000L * attempt);
+                    Thread.sleep(500L * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during retry", ie);
@@ -323,7 +323,7 @@ public class AnthropicLlmClient implements LlmClient {
                         .bodyValue(requestBody)
                         .retrieve()
                         .bodyToFlux(String.class)
-                        .timeout(Duration.ofSeconds(120))
+                        .timeout(Duration.ofSeconds(90))
                         .subscribe(
                                 data -> {
                                     try {
@@ -382,7 +382,7 @@ public class AnthropicLlmClient implements LlmClient {
                     throw new RuntimeException("LLM stream call failed: " + e.getMessage(), e);
                 }
                 try {
-                    Thread.sleep(1000L * attempt);
+                    Thread.sleep(500L * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during retry", ie);
