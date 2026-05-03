@@ -653,8 +653,11 @@ async function handleSend() {
       } else if (event.type === 'done') {
         messages.value[pendingIndex].streaming = false
         saveState()
-        await loadSessions()
-        nextTick(() => addCodeCopyButtons())
+        // 延迟执行非关键操作，不阻塞 UI 更新
+        nextTick(() => {
+          addCodeCopyButtons()
+          loadSessions()
+        })
       } else if (event.type === 'suggestions') {
         try {
           messages.value[pendingIndex].suggestions = JSON.parse(event.data)
