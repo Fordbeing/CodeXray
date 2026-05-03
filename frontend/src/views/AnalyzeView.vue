@@ -298,9 +298,11 @@ async function handleAnalyze() {
 
 function startPolling() {
   stopPolling()
+  let failCount = 0
   pollTimer = setInterval(async () => {
     try {
       const result = await getAnalysisResult(taskId.value)
+      failCount = 0
       taskStatus.value = result.status
       if (result.status === 'COMPLETED') {
         stopPolling()
@@ -316,7 +318,11 @@ function startPolling() {
         errorMessage.value = result.errorMessage
       }
     } catch {
-      stopPolling()
+      failCount++
+      if (failCount >= 5) {
+        stopPolling()
+        errorMessage.value = '获取分析状态失败，请刷新页面重试'
+      }
     }
   }, 3000)
 }

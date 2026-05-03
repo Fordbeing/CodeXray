@@ -11,6 +11,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -130,12 +131,20 @@ public class EmbeddingService {
 
         WebClient wc = getWebClient();
         if (apiAvailable && wc != null) {
-            try {
-                return callEmbeddingApi(text);
-            } catch (Exception e) {
-                log.warn("Embedding API failed, falling back to hash: {}", e.getMessage());
-                apiAvailable = false;
-                lastFailureTime = System.currentTimeMillis();
+            // 带一次重试：首次失败后等 500ms 重试一次
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    return callEmbeddingApi(text);
+                } catch (Exception e) {
+                    if (attempt == 0) {
+                        log.warn("Embedding API attempt 1 failed, retrying: {}", e.getMessage());
+                        try { Thread.sleep(500); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    } else {
+                        log.warn("Embedding API failed after retry, falling back to hash: {}", e.getMessage());
+                        apiAvailable = false;
+                        lastFailureTime = System.currentTimeMillis();
+                    }
+                }
             }
         }
 
@@ -147,8 +156,8 @@ public class EmbeddingService {
      */
     public List<float[]> embedBatch(List<String> texts) {
         List<float[]> results = new ArrayList<>();
-        for (int i = 0; i < texts.size(); i += 20) {
-            int end = Math.min(i + 20, texts.size());
+        for (int i = 0; i < texts.size(); i += 100) {
+            int end = Math.min(i + 100, texts.size());
             List<String> batch = texts.subList(i, end);
 
             if (!apiAvailable && System.currentTimeMillis() - lastFailureTime > RETRY_INTERVAL_MS) {
@@ -183,6 +192,7 @@ public class EmbeddingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(30))
                 .block();
 
         try {
@@ -211,6 +221,7 @@ public class EmbeddingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(30))
                 .block();
 
         try {

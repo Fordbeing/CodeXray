@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
@@ -29,15 +30,12 @@ public class AnalyzerAgent {
     }
 
     public List<ModuleAnalysis> analyze(String taskId, String repoPath) {
-        List<String> categories = List.of("controller", "service", "model", "config", "data", "util", "source");
-        List<ModuleAnalysis> results = new ArrayList<>();
-
-        for (String category : categories) {
-            ModuleAnalysis result = analyzeCategory(taskId, category);
-            if (result != null) results.add(result);
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            return analyzeParallel(taskId, executor);
+        } finally {
+            executor.shutdown();
         }
-
-        return results;
     }
 
     /**
@@ -48,7 +46,7 @@ public class AnalyzerAgent {
 
         List<Future<ModuleAnalysis>> futures = new ArrayList<>();
         for (String category : categories) {
-            futures.add(executor.submit(() -> analyzeCategory(taskId, category)));
+            futures.add(executor.submit(() -> analyzeCategory(taskId, category, executor)));
         }
 
         List<ModuleAnalysis> results = new ArrayList<>();
@@ -63,7 +61,7 @@ public class AnalyzerAgent {
         return results;
     }
 
-    private ModuleAnalysis analyzeCategory(String taskId, String category) {
+    private ModuleAnalysis analyzeCategory(String taskId, String category, ExecutorService executor) {
         // 使用纯类别过滤搜索，而非无意义的零向量 knn
         List<VectorStoreService.CodeChunkDoc> chunks = vectorStoreService.searchByCategory(
                 taskId, category, 50
@@ -72,13 +70,16 @@ public class AnalyzerAgent {
 
         log.info("AnalyzerAgent: analyzing {} chunks in category {}", chunks.size(), category);
 
-        // Map 阶段：按文件分组分析
+        // Map 阶段：按文件分组，并行分析
         Map<String, List<VectorStoreService.CodeChunkDoc>> byFile = chunks.stream()
                 .collect(Collectors.groupingBy(VectorStoreService.CodeChunkDoc::file_path));
 
-        List<String> fileAnalyses = new ArrayList<>();
+        // 并行提交每个文件的 LLM 分析
+        List<Future<String>> fileFutures = new ArrayList<>();
+        List<String> filePaths = new ArrayList<>();
         for (Map.Entry<String, List<VectorStoreService.CodeChunkDoc>> entry : byFile.entrySet()) {
             String filePath = entry.getKey();
+            filePaths.add(filePath);
             List<VectorStoreService.CodeChunkDoc> fileChunks = entry.getValue();
 
             StringBuilder codeContext = new StringBuilder();
@@ -94,16 +95,25 @@ public class AnalyzerAgent {
                 if (chunkCount >= 3) break;
             }
 
-            try {
+            String ctx = codeContext.toString();
+            fileFutures.add(executor.submit(() -> {
                 String systemPrompt = "你是一个专业的代码分析专家。请基于提供的代码内容进行分析，" +
                         "指出该文件的具体职责、关键类/方法、与其他模块的关系。" +
                         "要求：基于实际代码内容分析，不要泛泛而谈，引用具体的类名和方法名。";
-                String analysis = llmClient.chat(systemPrompt,
-                        "分析以下代码文件的职责和关键方法，用 1-2 句话总结：\n\n" + codeContext);
-                fileAnalyses.add(filePath + ": " + analysis);
+                return llmClient.chat(systemPrompt,
+                        "分析以下代码文件的职责和关键方法，用 1-2 句话总结：\n\n" + ctx);
+            }));
+        }
+
+        // 收集并行结果
+        List<String> fileAnalyses = new ArrayList<>();
+        for (int i = 0; i < fileFutures.size(); i++) {
+            try {
+                String analysis = fileFutures.get(i).get();
+                fileAnalyses.add(filePaths.get(i) + ": " + analysis);
             } catch (Exception e) {
-                log.warn("File analysis failed for {}: {}", filePath, e.getMessage());
-                fileAnalyses.add(filePath + ": (analysis failed)");
+                log.warn("File analysis failed for {}: {}", filePaths.get(i), e.getMessage());
+                fileAnalyses.add(filePaths.get(i) + ": (analysis failed)");
             }
         }
 

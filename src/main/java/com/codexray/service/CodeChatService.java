@@ -77,8 +77,8 @@ public class CodeChatService {
                 && question.equals(history.get(history.size() - 1).get("content"));
         if (!alreadyAdded) {
             history.add(Map.of("role", "user", "content", question));
-            // 持久化用户消息到 MySQL
-            saveToDb(sid, repoUrl, userId, "user", question);
+            // 异步持久化用户消息到 MySQL（不阻塞响应）
+            virtualExecutor.execute(() -> saveToDb(sid, repoUrl, userId, "user", question));
         }
 
         // 生成 pollId
@@ -112,8 +112,8 @@ public class CodeChatService {
                 String fullAnswer = answerBuilder.toString();
                 // 保存助手回复到会话历史
                 history.add(Map.of("role", "assistant", "content", fullAnswer));
-                // 持久化助手回复到 MySQL
-                saveToDb(sid, repoUrl, userId, "assistant", fullAnswer);
+                // 异步持久化助手回复到 MySQL
+                virtualExecutor.execute(() -> saveToDb(sid, repoUrl, userId, "assistant", fullAnswer));
                 // 标记完成
                 pendingResults.put(pollId, new ChatPending(
                         pollId, sid, "assistant", fullAnswer,
@@ -225,19 +225,41 @@ public class CodeChatService {
     }
 
     private String retrieveContext(String taskId, String question) {
-        List<VectorStoreService.CodeChunkDoc> chunks = new ArrayList<>();
-        try {
+        // 并行执行向量搜索和文本搜索
+        Future<List<VectorStoreService.CodeChunkDoc>> vectorFuture = virtualExecutor.submit(() -> {
             float[] qvec = embeddingService.embed(question);
-            chunks.addAll(vectorStore.search(taskId, qvec, 6, null));
+            return vectorStore.search(taskId, qvec, 6, null);
+        });
+        Future<List<VectorStoreService.CodeChunkDoc>> textFuture = virtualExecutor.submit(() ->
+                vectorStore.searchText(taskId, question, 4));
+
+        List<VectorStoreService.CodeChunkDoc> chunks = new ArrayList<>();
+        boolean vectorFailed = false;
+        try {
+            chunks.addAll(vectorFuture.get(5, java.util.concurrent.TimeUnit.SECONDS));
         } catch (Exception e) {
-            log.warn("Vector search failed, falling back to text search: {}", e.getMessage());
+            log.warn("Vector search failed: {}", e.getMessage());
+            vectorFailed = true;
         }
-        chunks.addAll(vectorStore.searchText(taskId, question, 4));
+        try {
+            chunks.addAll(textFuture.get(5, java.util.concurrent.TimeUnit.SECONDS));
+        } catch (Exception e) {
+            log.warn("Text search failed: {}", e.getMessage());
+        }
+
+        // 向量搜索失败时，扩大文本搜索兜底
+        if (vectorFailed && chunks.isEmpty()) {
+            try {
+                chunks.addAll(vectorStore.searchText(taskId, question, 20));
+            } catch (Exception e) {
+                log.warn("Fallback text search also failed: {}", e.getMessage());
+            }
+        }
 
         List<VectorStoreService.CodeChunkDoc> unique = deduplicate(chunks);
 
         if (unique.isEmpty()) {
-            return "（未找到相关代码片段，请确认仓库已完成分析）";
+            return "（未找到相关代码片段。可能原因：Embedding API 不可达或仓库尚未完成分析）";
         }
         return unique.stream().map(c ->
                 "### " + c.file_path() + " [" + c.start_line() + "-" + c.end_line() + "]\n"
@@ -358,32 +380,46 @@ public class CodeChatService {
         wrapper.last("LIMIT 50");
 
         List<ChatHistory> records = chatHistoryMapper.selectList(wrapper);
+        if (records.isEmpty()) return;
+
+        // 批量获取所有 session 的第一条用户消息（1 条 SQL 替代 N 条）
+        List<String> sessionIds = records.stream().map(ChatHistory::getSessionId).toList();
+        Map<String, String> firstQuestions = batchGetFirstQuestions(sessionIds);
+
         for (ChatHistory h : records) {
-            // 获取每个会话的第一条用户消息作为会话名称
-            String firstQuestion = getFirstUserQuestion(h.getSessionId());
+            String q = firstQuestions.get(h.getSessionId());
             sessionMeta.putIfAbsent(h.getSessionId(),
                     new SessionInfo(h.getSessionId(), h.getRepoUrl(), null,
-                            firstQuestion, h.getCreatedAt(), h.getUserId()));
+                            q, h.getCreatedAt(), h.getUserId()));
         }
     }
 
-    private String getFirstUserQuestion(String sessionId) {
+    /**
+     * 批量获取多个 session 的第一条用户消息，仅 1 条 SQL。
+     */
+    private Map<String, String> batchGetFirstQuestions(List<String> sessionIds) {
+        Map<String, String> result = new HashMap<>();
         try {
+            // 一条 SQL 获取所有 session 的 user 消息（按时间排序）
             QueryWrapper<ChatHistory> q = new QueryWrapper<ChatHistory>()
-                    .select("content")
-                    .eq("session_id", sessionId)
+                    .select("session_id", "content")
+                    .in("session_id", sessionIds)
                     .eq("role", "user")
-                    .orderByAsc("created_at")
-                    .last("LIMIT 1");
-            ChatHistory first = chatHistoryMapper.selectOne(q);
-            if (first != null && first.getContent() != null) {
-                String content = first.getContent().trim();
-                return content.length() > 50 ? content.substring(0, 50) + "..." : content;
+                    .orderByAsc("created_at");
+            List<ChatHistory> allMessages = chatHistoryMapper.selectList(q);
+            // 每个 session 只取第一条
+            Set<String> seen = new HashSet<>();
+            for (ChatHistory h : allMessages) {
+                if (seen.add(h.getSessionId()) && h.getContent() != null) {
+                    String content = h.getContent().trim();
+                    result.put(h.getSessionId(),
+                            content.length() > 50 ? content.substring(0, 50) + "..." : content);
+                }
             }
         } catch (Exception e) {
-            log.debug("Failed to get first question for session {}: {}", sessionId, e.getMessage());
+            log.debug("Failed to batch get first questions: {}", e.getMessage());
         }
-        return null;
+        return result;
     }
 
     public String newSession(String repoUrl, String taskId, Long userId) {

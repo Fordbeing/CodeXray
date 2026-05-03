@@ -291,7 +291,7 @@ public class AnthropicLlmClient implements LlmClient {
                     throw new RuntimeException("LLM API call failed: " + e.getMessage(), e);
                 }
                 try {
-                    Thread.sleep(2000L * attempt);
+                    Thread.sleep(1000L * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during retry", ie);
@@ -323,7 +323,7 @@ public class AnthropicLlmClient implements LlmClient {
                         .bodyValue(requestBody)
                         .retrieve()
                         .bodyToFlux(String.class)
-                        .timeout(Duration.ofSeconds(180))
+                        .timeout(Duration.ofSeconds(120))
                         .subscribe(
                                 data -> {
                                     try {
@@ -364,7 +364,7 @@ public class AnthropicLlmClient implements LlmClient {
                                 latch::countDown
                         );
 
-                if (!latch.await(180, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (!latch.await(120, java.util.concurrent.TimeUnit.SECONDS)) {
                     throw new RuntimeException("Streaming timed out");
                 }
                 if (streamError.get() != null) {
@@ -372,21 +372,17 @@ public class AnthropicLlmClient implements LlmClient {
                 }
 
                 if (fullContent.isEmpty()) {
-                    log.warn("Streaming returned no content, falling back to non-streaming");
-                    String result = callMessagesApiMultiTurn(systemPrompt, messages);
-                    onToken.accept(result);
+                    throw new RuntimeException("Streaming returned no content");
                 }
                 return;
             } catch (Exception e) {
                 log.warn("LLM stream call attempt {}/3 failed: {}", attempt, e.getMessage());
                 if (attempt == 3) {
-                    log.error("LLM stream call failed after 3 attempts, falling back to non-streaming", e);
-                    String result = callMessagesApiMultiTurn(systemPrompt, messages);
-                    onToken.accept(result);
-                    return;
+                    log.error("LLM stream call failed after 3 attempts", e);
+                    throw new RuntimeException("LLM stream call failed: " + e.getMessage(), e);
                 }
                 try {
-                    Thread.sleep(2000L * attempt);
+                    Thread.sleep(1000L * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during retry", ie);
