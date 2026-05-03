@@ -95,6 +95,19 @@
           <div class="scroll-anchor"></div>
         </div>
 
+        <!-- 代码引用区 -->
+        <div v-if="codeRefs.length > 0" class="code-refs">
+          <div v-for="(ref, i) in codeRefs" :key="i" class="code-ref-card">
+            <div class="code-ref-header">
+              <span class="code-ref-file">{{ ref.file }}{{ ref.line ? ':' + ref.line : '' }}</span>
+              <button class="code-ref-remove" @click="codeRefs.splice(i, 1)">
+                <el-icon :size="12"><Close /></el-icon>
+              </button>
+            </div>
+            <pre class="code-ref-content">{{ ref.content.slice(0, 300) }}{{ ref.content.length > 300 ? '...' : '' }}</pre>
+          </div>
+        </div>
+
         <!-- 输入区 -->
         <div class="chat-input" :class="{ 'input-locked': !currentSessionId }">
           <el-input
@@ -120,9 +133,44 @@ import { ref, computed, nextTick, onMounted, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Plus, Expand, Close, Link, Connection, Cpu, User } from '@element-plus/icons-vue'
-import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult } from '../api/chat'
+import { getChatHistory, listChatSessions, createChatSession, deleteChatSession, sendChatAsync, getChatResult, sendChatStream } from '../api/chat'
 import ChatSidebar from '../components/chat/ChatSidebar.vue'
 import { marked } from 'marked'
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import python from 'highlight.js/lib/languages/python'
+import java from 'highlight.js/lib/languages/java'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import sql from 'highlight.js/lib/languages/sql'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import typescript from 'highlight.js/lib/languages/typescript'
+import go from 'highlight.js/lib/languages/go'
+import rust from 'highlight.js/lib/languages/rust'
+import cpp from 'highlight.js/lib/languages/cpp'
+import yaml from 'highlight.js/lib/languages/yaml'
+import markdown from 'highlight.js/lib/languages/markdown'
+
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('js', javascript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('html', xml)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('ts', typescript)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('rust', rust)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('c', cpp)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('markdown', markdown)
 
 marked.setOptions({
   breaks: true,
@@ -158,6 +206,7 @@ const currentSessionId = ref(null)
 const currentTaskId = ref(null)
 const sessions = ref([])
 const sidebarOpen = ref(false)
+const codeRefs = ref([])
 
 // 活跃的轮询: pollId → { timer, messageIndex }
 const activePolls = new Map()
@@ -192,6 +241,7 @@ onMounted(async () => {
 
   const fromRepoUrl = route.query.repoUrl
   const fromTaskId = route.query.taskId
+  const fromQuestion = route.query.question
 
   if (fromRepoUrl) repoUrl.value = fromRepoUrl
   if (fromTaskId) currentTaskId.value = fromTaskId
@@ -204,6 +254,11 @@ onMounted(async () => {
   // 从其他页面跳转过来（带 repoUrl），自动进入会话
   if (fromRepoUrl) {
     await autoEnterSession(fromRepoUrl, fromTaskId)
+    // 如果带有推荐问题，自动发送
+    if (fromQuestion) {
+      question.value = fromQuestion
+      await handleSend()
+    }
     // 清除 query 参数，防止重复触发
     router.replace({ path: route.path })
   }
@@ -290,6 +345,7 @@ function startPolling(pollId, messageIndex) {
   let pollCount = 0
   const MAX_POLLS = 500
   let failCount = 0
+  let hlCount = 0
 
   const doPoll = async () => {
     pollCount++
@@ -331,6 +387,9 @@ function startPolling(pollId, messageIndex) {
           messages.value[messageIndex].streaming = true
           messages.value[messageIndex].pending = false
           scrollToBottomIfNear()
+          // 每 3 轮轮询高亮一次代码块
+          hlCount++
+          if (hlCount % 3 === 0) addCodeCopyButtons()
         }
         saveState()
         return
@@ -502,36 +561,76 @@ async function handleSend() {
   if (!canSend.value) return
 
   const q = question.value.trim()
-  messages.value.push({ role: 'user', content: q })
+  // 拼接代码引用
+  let fullQuestion = q
+  if (codeRefs.value.length > 0) {
+    fullQuestion += '\n\n## 引用的代码\n'
+    codeRefs.value.forEach(ref => {
+      fullQuestion += `\n### ${ref.file}${ref.line ? ':' + ref.line : ''}\n\`\`\`\n${ref.content}\n\`\`\`\n`
+    })
+  }
+  messages.value.push({ role: 'user', content: codeRefs.value.length > 0 ? q + '\n\n（引用了 ' + codeRefs.value.length + ' 段代码）' : q })
   question.value = ''
+  codeRefs.value = []
 
   const pendingIndex = messages.value.length
   messages.value.push({ role: 'assistant', content: '', pending: true, streaming: false })
   await scrollToBottom()
 
   try {
-    const resp = await sendChatAsync(repoUrl.value, q, currentSessionId.value, currentTaskId.value)
-    const pollId = resp.pollId
+    // SSE 流式模式
+    const { stream } = await sendChatStream(repoUrl.value, fullQuestion, currentSessionId.value, currentTaskId.value)
+    messages.value[pendingIndex].pending = false
+    messages.value[pendingIndex].streaming = true
+    let hlCount = 0
 
-    messages.value[pendingIndex].pollId = pollId
-
-    if (!currentSessionId.value) {
-      await loadSessions()
-      if (sessions.value.length > 0 && !currentSessionId.value) {
-        currentSessionId.value = sessions.value[0].sessionId
+    for await (const event of stream) {
+      if (event.type === 'session') {
+        if (!currentSessionId.value) {
+          currentSessionId.value = event.data
+          await loadSessions()
+        }
+      } else if (event.type === 'token') {
+        messages.value[pendingIndex].content += event.data
+        scrollToBottomIfNear()
+        hlCount++
+        if (hlCount % 10 === 0) addCodeCopyButtons()
+      } else if (event.type === 'done') {
+        messages.value[pendingIndex].streaming = false
+        saveState()
+        await loadSessions()
+        nextTick(() => addCodeCopyButtons())
+      } else if (event.type === 'error') {
+        messages.value[pendingIndex].content = event.data
+        messages.value[pendingIndex].error = true
+        messages.value[pendingIndex].streaming = false
+        saveState()
       }
     }
-
-    saveState()
-    startPolling(pollId, pendingIndex)
   } catch (e) {
-    messages.value[pendingIndex] = {
-      role: 'assistant',
-      content: '发送失败：' + (e.message || '未知错误'),
-      error: true,
+    // SSE 不可用，降级到轮询模式
+    try {
+      const resp = await sendChatAsync(repoUrl.value, fullQuestion, currentSessionId.value, currentTaskId.value)
+      messages.value[pendingIndex].pending = true
+      messages.value[pendingIndex].streaming = false
+      messages.value[pendingIndex].pollId = resp.pollId
+      if (!currentSessionId.value) {
+        await loadSessions()
+        if (sessions.value.length > 0 && !currentSessionId.value) {
+          currentSessionId.value = sessions.value[0].sessionId
+        }
+      }
+      saveState()
+      startPolling(resp.pollId, pendingIndex)
+    } catch (e2) {
+      messages.value[pendingIndex] = {
+        role: 'assistant',
+        content: '发送失败：' + (e2.message || '未知错误'),
+        error: true,
+      }
+      saveState()
+      await scrollToBottom()
     }
-    saveState()
-    await scrollToBottom()
   }
 }
 
@@ -586,10 +685,26 @@ async function copyCode(btn) {
   }
 }
 
+// 暴露 addCodeRef 供全局调用（从代码浏览器引用代码）
+function addCodeRef(file, content, line) {
+  if (codeRefs.value.length >= 5) {
+    ElMessage.warning('最多引用 5 段代码')
+    return
+  }
+  codeRefs.value.push({ file, content: content.slice(0, 2000), line })
+}
+window.__addCodeRef = addCodeRef
+
 function addCodeCopyButtons() {
   if (!messagesRef.value) return
   const pres = messagesRef.value.querySelectorAll('.message-text pre')
   pres.forEach(pre => {
+    // 语法高亮（每次内容更新都需要重新高亮）
+    const codeEl = pre.querySelector('code')
+    if (codeEl && !codeEl.dataset.highlighted) {
+      hljs.highlightElement(codeEl)
+    }
+    // 复制按钮（只需添加一次）
     if (pre.querySelector('.code-copy-btn')) return
     const wrapper = document.createElement('div')
     wrapper.className = 'code-block-wrapper'
@@ -924,6 +1039,68 @@ function addCodeCopyButtons() {
 }
 
 @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+
+/* ===== 代码引用区 ===== */
+.code-refs {
+  padding: 8px 20px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.code-ref-card {
+  background: #f8faf9;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 8px 12px;
+  max-width: 100%;
+  min-width: 200px;
+}
+
+.code-ref-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.code-ref-file {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2da44e;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.code-ref-remove {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b949e;
+  transition: all 0.1s;
+}
+
+.code-ref-remove:hover {
+  background: #fef2f2;
+  color: #cf222e;
+}
+
+.code-ref-content {
+  font-size: 12px;
+  color: #656d76;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow: hidden;
+  line-height: 1.4;
+}
 
 .chat-input {
   display: flex; gap: 12px; padding: 14px 20px;

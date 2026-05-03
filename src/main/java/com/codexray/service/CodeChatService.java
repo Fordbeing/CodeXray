@@ -12,7 +12,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
@@ -134,6 +136,73 @@ public class CodeChatService {
      */
     public ChatPending pollResult(String pollId) {
         return pendingResults.get(pollId);
+    }
+
+    /**
+     * SSE 流式问答：直接通过 SSE 推送 token，无需轮询。
+     */
+    public void askStreaming(String sessionId, String repoUrl, String taskId,
+                             String question, Long userId, SseEmitter emitter) {
+        boolean isNew = sessionId == null || sessionId.isBlank();
+        if (isNew) {
+            sessionId = UUID.randomUUID().toString();
+        }
+        final String sid = sessionId;
+        sessions.putIfAbsent(sid, new ArrayList<>());
+        if (isNew) {
+            sessionMeta.put(sid,
+                    new SessionInfo(sid, repoUrl, taskId, question, LocalDateTime.now(), userId));
+        }
+
+        List<Map<String, String>> history = sessions.get(sid);
+
+        // 防重复
+        boolean alreadyAdded = !history.isEmpty()
+                && "user".equals(history.get(history.size() - 1).get("role"))
+                && question.equals(history.get(history.size() - 1).get("content"));
+        if (!alreadyAdded) {
+            history.add(Map.of("role", "user", "content", question));
+            virtualExecutor.execute(() -> saveToDb(sid, repoUrl, userId, "user", question));
+        }
+
+        // 推送 sessionId 事件
+        try {
+            emitter.send(SseEmitter.event().name("session").data(sid));
+        } catch (IOException e) {
+            emitter.completeWithError(e);
+            return;
+        }
+
+        try {
+            StringBuilder answerBuilder = new StringBuilder();
+            java.util.function.Consumer<String> onToken = token -> {
+                answerBuilder.append(token);
+                try {
+                    emitter.send(SseEmitter.event().name("token").data(token));
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            };
+
+            if (taskId != null && !taskId.isBlank()) {
+                ragAnswerStreaming(taskId, question, history, onToken);
+            } else {
+                freeAnswerStreaming(repoUrl, question, history, onToken);
+            }
+
+            String fullAnswer = answerBuilder.toString();
+            history.add(Map.of("role", "assistant", "content", fullAnswer));
+            virtualExecutor.execute(() -> saveToDb(sid, repoUrl, userId, "assistant", fullAnswer));
+
+            emitter.send(SseEmitter.event().name("done").data(""));
+            emitter.complete();
+        } catch (Exception e) {
+            log.error("SSE streaming failed for session={}: {}", sid, e.getMessage(), e);
+            try {
+                emitter.send(SseEmitter.event().name("error").data("抱歉，发生了错误：" + e.getMessage()));
+            } catch (IOException ignored) {}
+            emitter.completeWithError(e);
+        }
     }
 
     /**

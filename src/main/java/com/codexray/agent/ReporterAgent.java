@@ -1,10 +1,13 @@
 package com.codexray.agent;
 
 import com.codexray.llm.LlmClient;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -17,9 +20,11 @@ public class ReporterAgent {
     private static final Logger log = LoggerFactory.getLogger(ReporterAgent.class);
 
     private final LlmClient llmClient;
+    private final ObjectMapper objectMapper;
 
-    public ReporterAgent(LlmClient llmClient) {
+    public ReporterAgent(LlmClient llmClient, ObjectMapper objectMapper) {
         this.llmClient = llmClient;
+        this.objectMapper = objectMapper;
     }
 
     public String generateReport(IndexerAgent.ProjectProfile profile,
@@ -107,6 +112,34 @@ public class ReporterAgent {
         } catch (Exception e) {
             log.error("Report generation failed", e);
             return "{\"summary\":\"Analysis completed\",\"error\":\"" + e.getMessage() + "\"}";
+        }
+    }
+
+    /**
+     * 基于分析报告生成推荐问题。
+     */
+    public List<String> generateQuestions(String reportJson) {
+        try {
+            String prompt = """
+                    基于以下代码分析报告，生成 6 个推荐的代码问答问题。
+                    问题应该针对这个具体项目，帮助用户深入了解代码。
+                    输出 JSON 数组格式：["问题1", "问题2", ...]
+                    只输出 JSON，不要其他内容。
+
+                    分析报告：
+                    """ + reportJson;
+
+            String response = llmClient.chat("你是代码分析助手，根据分析报告生成推荐问题。只输出 JSON 数组。", prompt);
+            response = response.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
+            return objectMapper.readValue(response, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("Failed to generate questions: {}", e.getMessage());
+            return List.of(
+                    "这个项目的核心架构是什么？",
+                    "有哪些潜在的性能问题？",
+                    "代码测试覆盖情况如何？",
+                    "主要模块之间的依赖关系是什么？"
+            );
         }
     }
 }

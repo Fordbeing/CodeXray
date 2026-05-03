@@ -28,3 +28,23 @@ export function deleteTask(taskId) {
 export function previewRepo(repoUrl) {
   return request.get('/analysis/preview', { params: { repoUrl } })
 }
+
+export function getFileTree(taskId) {
+  return request.get(`/analysis/${taskId}/tree`)
+}
+
+export function getFileContent(taskId, path) {
+  return request.get(`/analysis/${taskId}/file`, { params: { path } })
+}
+
+export function codeSearch(taskId, q, limit = 10) {
+  return request.get(`/analysis/${taskId}/search`, { params: { q, limit } })
+}
+
+export function getQuestions(taskId) {
+  return request.get(`/analysis/${taskId}/questions`)
+}
+
+export function getNotifications(limit = 10) {
+  return request.get('/analysis/notifications', { params: { limit } })
+}
