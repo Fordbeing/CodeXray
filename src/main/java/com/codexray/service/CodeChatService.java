@@ -213,10 +213,10 @@ public class CodeChatService {
             redisSessionStore.putHistory(sid, history);
             virtualExecutor.execute(() -> saveToDb(sid, repoUrl, userId, "assistant", fullAnswer));
 
-            // 先发送 done，不阻塞等待追问建议
+            // 先发送 done，通知前端答案已输出完毕
             emitter.send(SseEmitter.event().name("done").data(""));
 
-            // 异步生成追问建议并推送
+            // 在虚拟线程中生成追问建议，建议发送完成后再关闭 SSE
             virtualExecutor.execute(() -> {
                 try {
                     List<String> suggestions = generateFollowUps(question, fullAnswer);
@@ -226,9 +226,10 @@ public class CodeChatService {
                     }
                 } catch (Exception e) {
                     log.debug("Failed to send suggestions: {}", e.getMessage());
+                } finally {
+                    emitter.complete();
                 }
             });
-            emitter.complete();
         } catch (Exception e) {
             log.error("SSE streaming failed for session={}: {}", sid, e.getMessage(), e);
             try {
