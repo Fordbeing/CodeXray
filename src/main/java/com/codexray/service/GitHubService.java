@@ -26,13 +26,26 @@ public class GitHubService {
     private final WebClient webClient;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
+    private final SettingService settingService;
 
     public GitHubService(WebClient.Builder builder,
                          RedisTemplate<String, String> redisTemplate,
-                         ObjectMapper objectMapper) {
+                         ObjectMapper objectMapper,
+                         SettingService settingService) {
         this.webClient = builder.baseUrl("https://api.github.com").build();
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.settingService = settingService;
+    }
+
+    private WebClient.RequestHeadersSpec<?> githubRequest(String uri, Object... vars) {
+        String token = settingService.get("github_token");
+        var spec = webClient.get().uri(uri, vars)
+                .header("Accept", "application/vnd.github.v3+json");
+        if (token != null && !token.isBlank()) {
+            spec.header("Authorization", "Bearer " + token);
+        }
+        return spec;
     }
 
     public Map<String, Object> getUserProfile(String username) {
@@ -41,9 +54,7 @@ public class GitHubService {
         if (cached != null) return cached;
 
         try {
-            Map<String, Object> profile = webClient.get()
-                    .uri("/users/{username}", username)
-                    .header("Accept", "application/vnd.github.v3+json")
+            Map<String, Object> profile = githubRequest("/users/{username}", username)
                     .retrieve()
                     .bodyToMono(Map.class)
                     .block(Duration.ofSeconds(10));
@@ -70,9 +81,8 @@ public class GitHubService {
         if (cached != null) return cached;
 
         try {
-            List<Map<String, Object>> repos = webClient.get()
-                    .uri("/users/{username}/repos?sort={sort}&per_page={per_page}", username, sort, perPage)
-                    .header("Accept", "application/vnd.github.v3+json")
+            List<Map<String, Object>> repos = githubRequest(
+                    "/users/{username}/repos?sort={sort}&per_page={per_page}", username, sort, perPage)
                     .retrieve()
                     .bodyToMono(List.class)
                     .block(Duration.ofSeconds(10));
@@ -99,9 +109,8 @@ public class GitHubService {
         if (cached != null) return cached;
 
         try {
-            List<Map<String, Object>> starred = webClient.get()
-                    .uri("/users/{username}/starred?per_page={per_page}", username, perPage)
-                    .header("Accept", "application/vnd.github.v3+json")
+            List<Map<String, Object>> starred = githubRequest(
+                    "/users/{username}/starred?per_page={per_page}", username, perPage)
                     .retrieve()
                     .bodyToMono(List.class)
                     .block(Duration.ofSeconds(10));
