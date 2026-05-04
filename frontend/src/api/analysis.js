@@ -89,3 +89,38 @@ export async function* subscribeToAnalysis(taskId) {
 function tryParse(str) {
   try { return JSON.parse(str) } catch { return str }
 }
+
+/** 获取架构图数据 */
+export function getArchitectureGraph(taskId) {
+  return request.get(`/analysis/${taskId}/graph`)
+}
+
+/** 获取 AI 代码导览 */
+export function getCodeTour(taskId) {
+  return request.get(`/analysis/${taskId}/tour`)
+}
+
+/** 获取用户分析统计 */
+export function getUserStats() {
+  return request.get('/analysis/stats')
+}
+
+/** 创建分享链接 */
+export function createShareLink(taskId, { password, expiresInDays } = {}) {
+  return request.post(`/analysis/${taskId}/share`, { password, expiresInDays })
+}
+
+/** 查看分享报告 */
+export function getSharedReport(shareToken, password) {
+  return request.get(`/analysis/shared/${shareToken}`, { params: { password } })
+}
+
+/** 列出我的分享 */
+export function listShares() {
+  return request.get('/analysis/shares')
+}
+
+/** 撤销分享 */
+export function revokeShare(shareToken) {
+  return request.delete(`/analysis/shares/${shareToken}`)
+}

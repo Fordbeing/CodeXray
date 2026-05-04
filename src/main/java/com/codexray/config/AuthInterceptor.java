@@ -32,7 +32,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         String uri = request.getRequestURI();
 
         // 公开路径直接放行
-        if (PUBLIC_PATHS.contains(uri) || uri.startsWith("/api/trending/")) {
+        if (PUBLIC_PATHS.contains(uri) || uri.startsWith("/api/trending/") || uri.startsWith("/api/analysis/shared/")) {
             return true;
         }
 

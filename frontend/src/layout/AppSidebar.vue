@@ -131,6 +131,7 @@ const menuItems = [
   { path: '/', label: '仪表盘', icon: HomeFilled },
   { path: '/analyze', label: '仓库分析', icon: Search },
   { path: '/chat', label: '代码问答', icon: ChatDotRound },
+  { path: '/cross-chat', label: '跨仓库问答', icon: ChatDotRound },
   { path: '/review', label: 'AI 代码审查', icon: View },
   { path: '/compare', label: '报告对比', icon: DataAnalysis },
   { path: '/trending', label: '热点推送', icon: TrendCharts },

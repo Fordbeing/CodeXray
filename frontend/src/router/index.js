@@ -9,6 +9,7 @@ const routes = [
       { path: 'analyze', name: 'analyze', component: () => import('../views/AnalyzeView.vue'), meta: { title: '仓库分析' } },
       { path: 'analyze/:taskId', name: 'analyze-detail', component: () => import('../views/AnalyzeView.vue'), meta: { title: '分析结果' } },
       { path: 'chat', name: 'chat', component: () => import('../views/ChatView.vue'), meta: { title: '代码问答' } },
+      { path: 'cross-chat', name: 'cross-chat', component: () => import('../views/CrossRepoChatView.vue'), meta: { title: '跨仓库问答' } },
       { path: 'review', name: 'review', component: () => import('../views/CodeReviewView.vue'), meta: { title: 'AI 代码审查' } },
       { path: 'compare', name: 'compare', component: () => import('../views/CompareView.vue'), meta: { title: '报告对比' } },
       { path: 'trending', name: 'trending', component: () => import('../views/TrendingView.vue'), meta: { title: '热点推送' } },
@@ -20,6 +21,7 @@ const routes = [
   }
 ]
 
+routes.push({ path: '/share/:shareToken', name: 'shared-report', component: () => import('../views/SharedReportView.vue'), meta: { title: '分享报告' } })
 routes.push({ path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('../views/DashboardView.vue'), meta: { title: '404' } })
 
 const router = createRouter({

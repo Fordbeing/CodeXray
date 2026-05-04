@@ -1,6 +1,7 @@
 package com.codexray.config;
 
 import com.codexray.model.dto.TrendingRepoResponse;
+import com.codexray.model.dto.WeeklyTrendingRepoResponse;
 import com.codexray.service.EmailService;
 import com.codexray.service.TrendingService;
 import org.slf4j.Logger;
@@ -35,10 +36,12 @@ public class ScheduleConfig {
             List<TrendingRepoResponse> repos = trendingService.scrapeAndSave();
             log.info("Daily Trending scrape completed, {} repos", repos.size());
 
-            // 推送邮件
+            // 推送邮件（含日榜 + 周榜）
             if (!repos.isEmpty()) {
                 List<TrendingRepoResponse> reposEn = trendingService.getTodayTrending("en");
-                int sent = emailService.sendTrendingToAll(repos, reposEn);
+                List<WeeklyTrendingRepoResponse> weeklyZh = trendingService.getWeeklyTrending("zh");
+                List<WeeklyTrendingRepoResponse> weeklyEn = trendingService.getWeeklyTrending("en");
+                int sent = emailService.sendTrendingToAll(repos, reposEn, weeklyZh, weeklyEn);
                 log.info("Trending email pushed to {} subscribers", sent);
             }
         } catch (Exception e) {

@@ -235,6 +235,10 @@
             <el-icon style="margin-right: 4px"><Download /></el-icon>
             导出报告
           </el-button>
+          <el-button @click="showShareDialog = true">
+            <el-icon style="margin-right: 4px"><Share /></el-icon>
+            分享报告
+          </el-button>
         </div>
 
         <!-- 跳转问答 -->
@@ -249,6 +253,43 @@
           </el-button>
         </div>
       </el-card>
+
+      <!-- 雷达图 -->
+      <el-card v-if="report?.scoreDetails" class="section-card" shadow="never">
+        <template #header>
+          <span class="section-title">健康雷达图</span>
+        </template>
+        <RadarChart :scores="report.scoreDetails" :size="320" />
+      </el-card>
+
+      <!-- 架构图 -->
+      <el-card v-if="graphData" class="section-card" shadow="never">
+        <template #header>
+          <span class="section-title">架构依赖图</span>
+        </template>
+        <ArchitectureGraph :graph-data="graphData" @file-click="handleGraphFileClick" />
+      </el-card>
+
+      <!-- AI 代码导览 -->
+      <el-card class="section-card" shadow="never">
+        <template #header>
+          <div class="tour-header-row">
+            <span class="section-title">AI 代码导览</span>
+            <el-button
+              v-if="!tourData && !tourLoading"
+              type="primary"
+              size="small"
+              @click="loadTour"
+            >
+              开始导览
+            </el-button>
+          </div>
+        </template>
+        <CodeTour :tour="tourData" :loading="tourLoading" :error="tourError" @file-click="handleTourFileClick" />
+      </el-card>
+
+      <!-- 分享弹窗 -->
+      <ShareDialog v-model="showShareDialog" :task-id="taskId" />
     </div>
 
     <!-- 失败 -->
@@ -274,8 +315,12 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload, CopyDocument, Setting, RefreshRight, ChatDotRound, Download, FolderOpened } from '@element-plus/icons-vue'
-import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo, getQuestions, subscribeToAnalysis } from '../api/analysis'
+import { Upload, CopyDocument, Setting, RefreshRight, ChatDotRound, Download, FolderOpened, Share } from '@element-plus/icons-vue'
+import { analyzeRepo, uploadAndAnalyze, getAnalysisResult, previewRepo, getQuestions, subscribeToAnalysis, getArchitectureGraph, getCodeTour } from '../api/analysis'
+import ArchitectureGraph from '../components/graph/ArchitectureGraph.vue'
+import RadarChart from '../components/chart/RadarChart.vue'
+import CodeTour from '../components/tour/CodeTour.vue'
+import ShareDialog from '../components/ShareDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -294,6 +339,11 @@ const report = ref(null)
 const suggestedQuestions = ref([])
 const progress = ref(0)
 const progressMessages = ref([])
+const graphData = ref(null)
+const tourData = ref(null)
+const tourLoading = ref(false)
+const tourError = ref('')
+const showShareDialog = ref(false)
 let pollTimer = null
 
 const scoreLabels = {
@@ -373,6 +423,7 @@ function startSse() {
               catch { report.value = { summary: result.report, score: 0 } }
             }
             loadQuestions(taskId.value)
+            loadGraph(taskId.value)
             return
           } else if (data === 'FAILED') {
             return
@@ -416,6 +467,7 @@ function startPolling() {
           catch { report.value = { summary: result.report, score: 0 } }
         }
         loadQuestions(taskId.value)
+        loadGraph(taskId.value)
       } else if (result.status === 'FAILED') {
         clearInterval(pollTimer)
         pollTimer = null
@@ -453,6 +505,7 @@ onMounted(async () => {
           report.value = { summary: result.report, score: 0 }
         }
         loadQuestions(pathTaskId)
+        loadGraph(pathTaskId)
       } else if (result.status === 'FAILED') {
         errorMessage.value = result.errorMessage
       } else {
@@ -487,6 +540,34 @@ async function loadQuestions(id) {
 
 function askQuestion(question) {
   router.push({ path: '/chat', query: { repoUrl: repoUrl.value, taskId: taskId.value, question } })
+}
+
+async function loadGraph(id) {
+  try {
+    graphData.value = await getArchitectureGraph(id)
+  } catch {
+    graphData.value = null
+  }
+}
+
+async function loadTour() {
+  tourLoading.value = true
+  tourError.value = ''
+  try {
+    tourData.value = await getCodeTour(taskId.value)
+  } catch (e) {
+    tourError.value = e?.response?.data?.message || '生成导览失败'
+  } finally {
+    tourLoading.value = false
+  }
+}
+
+function handleGraphFileClick(path) {
+  router.push(`/explorer/${taskId.value}`)
+}
+
+function handleTourFileClick(path) {
+  router.push(`/explorer/${taskId.value}`)
 }
 
 function handleFileChange(file) {
@@ -881,5 +962,11 @@ function exportReport() {
 .error-actions {
   display: flex;
   gap: 12px;
+}
+
+.tour-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 </style>

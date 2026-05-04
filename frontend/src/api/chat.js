@@ -20,7 +20,7 @@ export function getChatResult(pollId) {
  * stream 是一个 AsyncIterable，yield { type: 'session'|'token'|'done'|'error', data }
  */
 export async function sendChatStream(repoUrl, question, sessionId, taskId) {
-  const token = localStorage.getItem('token')
+  const token = localStorage.getItem('codexray_token')
   const params = new URLSearchParams({ question })
   if (sessionId) params.set('sessionId', sessionId)
   if (repoUrl) params.set('repoUrl', repoUrl)
@@ -84,4 +84,48 @@ export function deleteChatSession(sessionId) {
 /** 导出会话为 Markdown */
 export function exportChatSession(sessionId) {
   return request.get(`/chat/session/${sessionId}/export`, { params: { format: 'md' } })
+}
+
+/**
+ * 跨仓库 SSE 流式问答。
+ * 返回 { stream: AsyncIterable, reader }
+ */
+export async function sendCrossRepoChatStream(question, taskIds) {
+  const token = localStorage.getItem('codexray_token')
+  const params = new URLSearchParams({ question })
+  if (taskIds && taskIds.length > 0) params.set('taskIds', taskIds.join(','))
+
+  const baseUrl = request.defaults?.baseURL || '/api'
+  const resp = await fetch(`${baseUrl}/chat/cross-repo/stream?${params}`, {
+    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+  })
+  if (!resp.ok) throw new Error(`SSE 请求失败: ${resp.status}`)
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  async function* stream() {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+      let eventType = null
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventType = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          const data = line.slice(5).trim()
+          if (eventType) {
+            yield { type: eventType, data }
+            eventType = null
+          }
+        }
+      }
+    }
+  }
+
+  return { stream: stream(), reader }
 }

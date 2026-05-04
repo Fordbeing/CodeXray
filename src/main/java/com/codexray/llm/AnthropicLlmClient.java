@@ -253,7 +253,12 @@ public class AnthropicLlmClient implements LlmClient {
     private List<Map<String, Object>> buildMessages(List<Map<String, String>> history, String question) {
         List<Map<String, Object>> messages = new ArrayList<>();
         for (Map<String, String> h : history) {
-            messages.add(Map.of("role", h.get("role"), "content", h.get("content")));
+            String role = h.get("role");
+            // Anthropic API 只允许 user/assistant 角色在 messages 中
+            if (!"user".equals(role) && !"assistant".equals(role)) {
+                continue;
+            }
+            messages.add(Map.of("role", role, "content", h.get("content")));
         }
         messages.add(Map.of("role", "user", "content", question));
         return messages;
@@ -346,7 +351,7 @@ public class AnthropicLlmClient implements LlmClient {
                             }
                             return response.bodyToFlux(String.class);
                         })
-                        .timeout(Duration.ofSeconds(90))
+                        .timeout(Duration.ofSeconds(180))
                         .subscribe(
                                 data -> {
                                     try {
@@ -387,7 +392,7 @@ public class AnthropicLlmClient implements LlmClient {
                                 latch::countDown
                         );
 
-                if (!latch.await(120, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (!latch.await(240, java.util.concurrent.TimeUnit.SECONDS)) {
                     throw new RuntimeException("Streaming timed out");
                 }
                 if (streamError.get() != null) {

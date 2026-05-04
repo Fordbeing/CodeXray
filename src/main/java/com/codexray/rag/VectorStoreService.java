@@ -202,6 +202,95 @@ public class VectorStoreService {
     }
 
     /**
+     * 跨仓库向量检索：不限定 task_id，或按 taskIds 列表过滤。
+     */
+    public List<CodeChunkDoc> searchCrossRepo(float[] queryVector, List<String> taskIds, int topK) {
+        try {
+            var searchBuilder = new SearchRequest.Builder()
+                    .index(INDEX_NAME)
+                    .size(topK)
+                    .source(s -> s.filter(f -> f.excludes("embedding")))
+                    .query(q -> q
+                            .bool(b -> {
+                                if (taskIds != null && !taskIds.isEmpty()) {
+                                    b.filter(f -> f.terms(t -> t
+                                            .field("task_id")
+                                            .terms(tv -> tv.value(taskIds.stream()
+                                                    .map(co.elastic.clients.elasticsearch._types.FieldValue::of)
+                                                    .toList()))));
+                                }
+                                return b;
+                            })
+                    )
+                    .knn(k -> {
+                        k.field("embedding")
+                         .queryVector(toFloatList(queryVector))
+                         .k((long) topK)
+                         .numCandidates(Math.max((long) topK * 10, 100L));
+                        if (taskIds != null && !taskIds.isEmpty()) {
+                            k.filter(f -> f.terms(t -> t
+                                    .field("task_id")
+                                    .terms(tv -> tv.value(taskIds.stream()
+                                            .map(co.elastic.clients.elasticsearch._types.FieldValue::of)
+                                            .toList()))));
+                        }
+                        return k;
+                    });
+
+            SearchResponse<CodeChunkDoc> response = client.search(searchBuilder.build(), CodeChunkDoc.class);
+            List<CodeChunkDoc> results = new ArrayList<>();
+            for (Hit<CodeChunkDoc> hit : response.hits().hits()) {
+                CodeChunkDoc doc = hit.source();
+                if (doc != null) results.add(doc);
+            }
+            return results;
+        } catch (Exception e) {
+            log.error("Cross-repo vector search failed", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 跨仓库全文检索：不限定 task_id，或按 taskIds 列表过滤。
+     */
+    public List<CodeChunkDoc> searchTextCrossRepo(String query, List<String> taskIds, int topK) {
+        try {
+            SearchResponse<CodeChunkDoc> response = client.search(s -> s
+                            .index(INDEX_NAME)
+                            .size(topK)
+                            .source(src -> src.filter(f -> f.excludes("embedding")))
+                            .query(q -> q
+                                    .bool(b -> {
+                                        if (taskIds != null && !taskIds.isEmpty()) {
+                                            b.filter(f -> f.terms(t -> t
+                                                    .field("task_id")
+                                                    .terms(tv -> tv.value(taskIds.stream()
+                                                            .map(co.elastic.clients.elasticsearch._types.FieldValue::of)
+                                                            .toList()))));
+                                        }
+                                        b.must(m -> m.multiMatch(mm -> mm
+                                                .query(query)
+                                                .fields("symbol_name", "content", "file_path")
+                                        ));
+                                        return b;
+                                    })
+                            ),
+                    CodeChunkDoc.class
+            );
+
+            List<CodeChunkDoc> results = new ArrayList<>();
+            for (Hit<CodeChunkDoc> hit : response.hits().hits()) {
+                CodeChunkDoc doc = hit.source();
+                if (doc != null) results.add(doc);
+            }
+            return results;
+        } catch (Exception e) {
+            log.error("Cross-repo text search failed", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
      * 删除指定任务的所有切片。
      */
     public void deleteByTaskId(String taskId) {

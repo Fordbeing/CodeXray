@@ -240,6 +240,108 @@ public class CodeChatService {
     }
 
     /**
+     * 跨仓库 SSE 流式问答。
+     */
+    public void chatAcrossReposStreaming(Long userId, String question, List<String> taskIds, SseEmitter emitter) {
+        try {
+            StringBuilder answerBuilder = new StringBuilder();
+            java.util.function.Consumer<String> onToken = token -> {
+                answerBuilder.append(token);
+                try {
+                    emitter.send(SseEmitter.event().name("token").data(token));
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            };
+
+            // 跨仓库检索上下文
+            String context = retrieveContextCrossRepo(taskIds, question);
+
+            String systemPrompt = """
+                    你是 CodeXray，一个专业的跨仓库代码分析助手。
+                    你可以同时分析多个代码仓库，帮助用户对比、总结和发现跨仓库的模式。
+
+                    ## 检索到的代码片段（来自多个仓库）
+                    %s
+
+                    要求：
+                    1. 基于代码内容回答，不要编造
+                    2. 引用具体仓库、文件路径和行号
+                    3. 如果涉及多个仓库，请明确标注来源
+                    4. 回答简洁专业，默认中文
+                    """.formatted(context);
+
+            llmClient.chatWithContextStreaming(systemPrompt, List.of(), question, onToken);
+
+            String fullAnswer = answerBuilder.toString();
+            emitter.send(SseEmitter.event().name("done").data(""));
+            emitter.complete();
+        } catch (Exception e) {
+            log.error("Cross-repo SSE streaming failed: {}", e.getMessage(), e);
+            try {
+                emitter.send(SseEmitter.event().name("error").data("抱歉，发生了错误：" + e.getMessage()));
+            } catch (IOException ignored) {}
+            emitter.completeWithError(e);
+        }
+    }
+
+    /**
+     * 跨仓库上下文检索。
+     */
+    private String retrieveContextCrossRepo(List<String> taskIds, String question) {
+        Future<List<VectorStoreService.CodeChunkDoc>> vectorFuture = virtualExecutor.submit(() -> {
+            float[] qvec = embeddingService.embed(question);
+            return vectorStore.searchCrossRepo(qvec, taskIds, 10);
+        });
+        Future<List<VectorStoreService.CodeChunkDoc>> textFuture = virtualExecutor.submit(() ->
+                vectorStore.searchTextCrossRepo(question, taskIds, 5));
+
+        List<VectorStoreService.CodeChunkDoc> chunks = new ArrayList<>();
+        try {
+            chunks.addAll(vectorFuture.get(5, TimeUnit.SECONDS));
+        } catch (Exception e) {
+            log.warn("Cross-repo vector search failed: {}", e.getMessage());
+        }
+        try {
+            chunks.addAll(textFuture.get(5, TimeUnit.SECONDS));
+        } catch (Exception e) {
+            log.warn("Cross-repo text search failed: {}", e.getMessage());
+        }
+
+        List<VectorStoreService.CodeChunkDoc> unique = deduplicate(chunks);
+        if (unique.isEmpty()) {
+            return "（未找到相关代码片段）";
+        }
+
+        // Token 感知截断
+        int contextBudget = 6000;
+        List<VectorStoreService.CodeChunkDoc> truncated =
+                TokenEstimator.truncateByTokenBudget(unique, c -> c.content(), contextBudget);
+
+        // 按 taskId 分组
+        Map<String, List<VectorStoreService.CodeChunkDoc>> grouped = truncated.stream()
+                .collect(Collectors.groupingBy(
+                        c -> c.task_id() != null ? c.task_id() : "unknown",
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        StringBuilder sb = new StringBuilder();
+        for (var entry : grouped.entrySet()) {
+            sb.append("### 仓库任务: ").append(entry.getKey()).append("\n");
+            for (var c : entry.getValue().stream().limit(5).toList()) {
+                sb.append("- ").append(c.file_path())
+                  .append(" [").append(c.start_line()).append("-").append(c.end_line()).append("]\n")
+                  .append(c.content()).append("\n\n");
+            }
+        }
+        if (truncated.size() < unique.size()) {
+            sb.append("（已省略 ").append(unique.size() - truncated.size()).append(" 个代码片段以控制上下文长度）");
+        }
+        return sb.toString();
+    }
+
+    /**
      * 发送问答消息（同步）。
      */
     public ChatMessage ask(String sessionId, String repoUrl, String taskId, String question, Long userId) {

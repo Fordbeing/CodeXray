@@ -8,6 +8,10 @@ export function getTrendingByDate(date, lang = 'zh') {
   return request.get('/trending', { params: { date, lang } })
 }
 
+export function getWeeklyTrending(lang = 'zh') {
+  return request.get('/trending/weekly', { params: { lang } })
+}
+
 export function refreshTrending(lang = 'zh') {
   return request.post('/trending/refresh', null, { params: { lang } })
 }

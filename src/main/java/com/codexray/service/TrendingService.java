@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.codexray.llm.LlmClient;
 import com.codexray.mapper.TrendingRepoMapper;
 import com.codexray.model.dto.TrendingRepoResponse;
+import com.codexray.model.dto.WeeklyTrendingRepoResponse;
 import com.codexray.model.entity.TrendingRepo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,8 +22,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -52,7 +52,8 @@ public class TrendingService {
     }
 
     /**
-     * 抓取 GitHub Trending 并保存（含 LLM 分析），然后更新缓存。
+     * 抓取 GitHub Trending 并保存到 DB（不含 LLM 分析），立即返回数据。
+     * LLM 分析在后台异步执行，完成后更新 DB 和缓存。
      */
     public List<TrendingRepoResponse> scrapeAndSave() {
         List<TrendingRepo> repos = scrapeTrending();
@@ -63,7 +64,38 @@ public class TrendingService {
                 new QueryWrapper<TrendingRepo>().eq("trend_date", today)
         );
 
-        // 并发调用 LLM 分析
+        // 保存新数据（不含 LLM 分析）
+        for (TrendingRepo repo : repos) {
+            repo.setTrendDate(today);
+            repo.setCreatedAt(LocalDateTime.now());
+            trendingRepoMapper.insert(repo);
+        }
+
+        log.info("Scraped and saved {} trending repos for {}", repos.size(), today);
+
+        // 立即更新缓存（不含分析）
+        List<TrendingRepoResponse> zhResponses = toResponses(repos, "zh");
+        List<TrendingRepoResponse> enResponses = toResponses(repos, "en");
+        putCache(today, "zh", zhResponses);
+        putCache(today, "en", enResponses);
+
+        // 后台异步执行 LLM 分析，完成后更新 DB 和缓存
+        List<TrendingRepo> reposForAnalysis = repos;
+        analysisExecutor.submit(() -> {
+            try {
+                analyzeAndUpdate(reposForAnalysis, today);
+            } catch (Exception e) {
+                log.error("Async LLM analysis failed", e);
+            }
+        });
+
+        return zhResponses;
+    }
+
+    /**
+     * 后台 LLM 分析：并发分析每个仓库，完成后更新 DB 和缓存。
+     */
+    private void analyzeAndUpdate(List<TrendingRepo> repos, LocalDate date) {
         List<Future<?>> futures = new ArrayList<>();
         for (TrendingRepo repo : repos) {
             futures.add(analysisExecutor.submit(() -> {
@@ -81,42 +113,22 @@ public class TrendingService {
             try { f.get(); } catch (Exception e) { log.warn("Analysis task failed", e); }
         }
 
-        // 保存新数据
+        // 更新 DB（已有 id，用 updateById 而非 delete+insert）
         for (TrendingRepo repo : repos) {
-            repo.setTrendDate(today);
-            repo.setCreatedAt(LocalDateTime.now());
-            trendingRepoMapper.insert(repo);
+            trendingRepoMapper.updateById(repo);
         }
 
-        log.info("Scraped and saved {} trending repos for {}", repos.size(), today);
-
-        // 更新缓存
-        List<TrendingRepoResponse> zhResponses = toResponses(repos, "zh");
-        List<TrendingRepoResponse> enResponses = toResponses(repos, "en");
-        putCache(today, "zh", zhResponses);
-        putCache(today, "en", enResponses);
-
-        return zhResponses;
+        // 更新缓存（含分析）
+        putCache(date, "zh", toResponses(repos, "zh"));
+        putCache(date, "en", toResponses(repos, "en"));
+        log.info("Async LLM analysis completed for {} repos", repos.size());
     }
 
     /**
-     * 异步刷新：后台抓取+分析，完成后再更新缓存。立即返回当前数据。
+     * 同步刷新：抓取+保存，立即返回新数据。LLM 分析后台执行。
      */
     public List<TrendingRepoResponse> refreshAsync(String lang) {
-        // 先获取当前数据返回
-        List<TrendingRepoResponse> current = loadFromDb(LocalDate.now(), lang);
-
-        // 后台执行刷新
-        analysisExecutor.submit(() -> {
-            try {
-                scrapeAndSave();
-                log.info("Async trending refresh completed");
-            } catch (Exception e) {
-                log.error("Async trending refresh failed", e);
-            }
-        });
-
-        return current;
+        return scrapeAndSave();
     }
 
     /**
@@ -126,17 +138,17 @@ public class TrendingService {
         String cacheKey = CACHE_PREFIX + date + ":" + lang;
 
         // 1. Redis 缓存
-        String cached = redisTemplate.opsForValue().get(cacheKey);
-        if (cached != null && !cached.isBlank()) {
-            try {
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null && !cached.isBlank()) {
                 List<TrendingRepoResponse> result = objectMapper.readValue(cached, LIST_TYPE);
                 if (!result.isEmpty()) {
                     log.debug("Redis cache hit: {}", cacheKey);
                     return result;
                 }
-            } catch (Exception e) {
-                log.warn("Failed to deserialize Redis cache: {}", cacheKey, e);
             }
+        } catch (Exception e) {
+            log.warn("Redis cache read failed, falling back to DB: {}", cacheKey, e);
         }
 
         // 2. 数据库
@@ -151,7 +163,8 @@ public class TrendingService {
     }
 
     /**
-     * 查询今日热门（带缓存），无数据时异步抓取。
+     * 查询今日热门（带缓存），无数据时同步抓取（阻塞等待，约 15s）。
+     * LLM 分析在后台异步执行。
      */
     public List<TrendingRepoResponse> getTodayTrending(String lang) {
         LocalDate today = LocalDate.now();
@@ -159,16 +172,84 @@ public class TrendingService {
         if (!results.isEmpty()) {
             return results;
         }
-        // 无数据时异步抓取，不阻塞请求
-        analysisExecutor.submit(() -> {
-            try {
-                scrapeAndSave();
-                log.info("Async trending scrape completed");
-            } catch (Exception e) {
-                log.error("Async trending scrape failed", e);
+        // 无数据时同步抓取并保存（约 15s），LLM 分析在后台执行
+        return scrapeAndSave();
+    }
+
+    /**
+     * 查询近 7 天周榜：按仓库聚合，统计上榜天数、累计今日星标、最新数据。
+     */
+    public List<WeeklyTrendingRepoResponse> getWeeklyTrending(String lang) {
+        String cacheKey = CACHE_PREFIX + "weekly:" + lang;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null && !cached.isBlank()) {
+                return objectMapper.readValue(cached, new TypeReference<>() {});
             }
+        } catch (Exception e) {
+            log.warn("Redis weekly cache read failed: {}", cacheKey, e);
+        }
+
+        LocalDate today = LocalDate.now();
+        LocalDate weekAgo = today.minusDays(6);
+        boolean isZh = !"en".equals(lang);
+
+        List<TrendingRepo> repos = trendingRepoMapper.selectList(
+                new QueryWrapper<TrendingRepo>()
+                        .ge("trend_date", weekAgo)
+                        .le("trend_date", today)
+                        .orderByAsc("trend_date")
+        );
+
+        // 按 repoName 聚合
+        LinkedHashMap<String, List<TrendingRepo>> grouped = new LinkedHashMap<>();
+        for (TrendingRepo repo : repos) {
+            grouped.computeIfAbsent(repo.getRepoName(), k -> new ArrayList<>()).add(repo);
+        }
+
+        List<WeeklyTrendingRepoResponse> results = new ArrayList<>();
+        for (var entry : grouped.entrySet()) {
+            List<TrendingRepo> list = entry.getValue();
+            // 取最新一条作为基础数据
+            TrendingRepo latest = list.get(list.size() - 1);
+            int totalToday = 0;
+            for (TrendingRepo r : list) {
+                if (r.getTodayStars() != null && !r.getTodayStars().isBlank()) {
+                    try { totalToday += Integer.parseInt(r.getTodayStars()); } catch (NumberFormatException ignored) {}
+                }
+            }
+            results.add(new WeeklyTrendingRepoResponse(
+                    latest.getRepoName(),
+                    latest.getRepoUrl(),
+                    latest.getDescription(),
+                    latest.getLanguage(),
+                    latest.getStars(),
+                    latest.getForks(),
+                    isZh ? latest.getAnalysisZh() : latest.getAnalysisEn(),
+                    list.size(),
+                    totalToday > 0 ? String.valueOf(totalToday) : null,
+                    latest.getTrendDate()
+            ));
+        }
+
+        // 按上榜天数降序，同天数按最新 stars 降序
+        results.sort((a, b) -> {
+            int cmp = Integer.compare(b.daysCount(), a.daysCount());
+            if (cmp != 0) return cmp;
+            long sa = 0, sb = 0;
+            try { sa = Long.parseLong(a.stars() != null ? a.stars().replaceAll("[^0-9]", "") : "0"); } catch (Exception ignored) {}
+            try { sb = Long.parseLong(b.stars() != null ? b.stars().replaceAll("[^0-9]", "") : "0"); } catch (Exception ignored) {}
+            return Long.compare(sb, sa);
         });
-        return List.of();
+
+        // 缓存 1 小时
+        try {
+            redisTemplate.opsForValue().set(cacheKey, objectMapper.writeValueAsString(results), 1, TimeUnit.HOURS);
+        } catch (Exception e) {
+            log.warn("Failed to cache weekly trending: {}", cacheKey, e);
+        }
+
+        return results;
     }
 
     // ========== 内部方法 ==========
