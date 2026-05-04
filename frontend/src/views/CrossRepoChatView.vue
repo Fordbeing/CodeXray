@@ -117,7 +117,7 @@ const loadingTasks = ref(true)
 const messages = ref([])
 const question = ref('')
 const streaming = ref(false)
-const streamMsg = reactive({ content: '', _html: '', _raw: '' })
+const streamMsg = reactive({ content: '', _html: '', _raw: '', streaming: false })
 const messagesRef = ref(null)
 
 const suggestions = [
@@ -128,16 +128,21 @@ const suggestions = [
 ]
 
 // 缓存 Markdown 渲染
+function escapeHtml(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function cachedMd(msg) {
   if (!msg.content) {
     msg._html = ''
     return ''
   }
+  // 内容未变则复用缓存，避免重复解析
   if (msg._html !== undefined && msg._raw === msg.content) return msg._html
   try {
     msg._html = marked.parse(msg.content)
   } catch {
-    msg._html = msg.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    msg._html = escapeHtml(msg.content).replace(/\n/g, '<br>')
   }
   msg._raw = msg.content
   return msg._html
@@ -192,6 +197,7 @@ async function sendQuestion() {
   streamMsg.content = ''
   streamMsg._html = ''
   streamMsg._raw = ''
+  streamMsg.streaming = true
   scrollToBottom()
 
   let tokenTimer = null
@@ -230,6 +236,7 @@ function finishStreaming() {
     messages.value.push({ role: 'assistant', content: streamMsg.content, _html: '', _raw: '' })
   }
   streaming.value = false
+  streamMsg.streaming = false
   streamMsg.content = ''
   streamMsg._html = ''
   streamMsg._raw = ''

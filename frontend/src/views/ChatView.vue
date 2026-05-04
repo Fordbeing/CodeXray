@@ -78,9 +78,9 @@
                   <span class="pending-text">AI 正在思考中...</span>
                 </div>
                 <!-- 错误 -->
-                <div v-show="msg.error">{{ msg.content }}</div>
+                <div v-show="msg.error" v-html="cachedMd(msg)"></div>
                 <!-- 正常内容（流式 + 完成共用，不会重建） -->
-                <div v-show="!msg.pending || msg.streaming">
+                <div v-show="(!msg.pending && !msg.error) || msg.streaming">
                   <div v-html="cachedMd(msg)"></div>
                   <span v-show="msg.streaming" class="stream-cursor"></span>
                 </div>
@@ -187,59 +187,47 @@ marked.setOptions({
   pedantic: false,
 })
 
+// 轻量 HTML 转义（流式阶段用，避免 marked.parse 全量解析的性能开销）
+function escapeHtml(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 // 每条消息独立缓存 Markdown 渲染结果，避免 v-html 重复替换 DOM
 function cachedMd(msg) {
   if (!msg.content) {
     msg._html = ''
     return ''
   }
+  // 内容未变则复用缓存，避免重复解析
   if (msg._html !== undefined && msg._raw === msg.content) return msg._html
   try {
     msg._html = marked.parse(msg.content)
   } catch {
-    msg._html = msg.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    msg._html = escapeHtml(msg.content).replace(/\n/g, '<br>')
   }
   msg._raw = msg.content
   return msg._html
 }
 
-// 流式渲染节流：用 requestAnimationFrame 跟浏览器刷新周期同步，避免中间帧闪烁
-let _renderTimer = null
-let _pendingContent = ''
-let _pendingIndex = -1
-
-function flushRender(messages) {
-  _renderTimer = null
-  if (_pendingIndex < 0 || _pendingIndex >= messages.length) return
-  const wasAtBottom = isNearBottom()
-  messages[_pendingIndex].content = _pendingContent
-  // 内容更新 + 滚动在同一帧内完成，避免分步操作导致闪烁
-  if (wasAtBottom && messagesRef.value) {
-    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+// 流式输出：直接更新响应式内容，Vue 自身调度器会合并渲染
+function applyStreamContent(content, index) {
+  if (index >= 0 && index < messages.value.length) {
+    messages.value[index].content = content
+    scrollToBottomIfNear()
   }
 }
 
-function scheduleRender(content, index, messages) {
-  _pendingContent = content
-  _pendingIndex = index
-  if (!_renderTimer) {
-    _renderTimer = requestAnimationFrame(() => flushRender(messages))
+// 流式输出结束：切换为完整 Markdown 渲染，保存状态
+function finishStreaming(index) {
+  if (messages.value[index]?.streaming) {
+    messages.value[index].streaming = false
+    delete messages.value[index]._html
+    saveState()
+    nextTick(() => {
+      addCodeCopyButtons()
+      refreshSessions()
+    })
   }
-}
-
-function flushRenderNow(messages) {
-  if (_renderTimer) {
-    cancelAnimationFrame(_renderTimer)
-    _renderTimer = null
-  }
-  if (_pendingIndex >= 0 && _pendingIndex < messages.length) {
-    const wasAtBottom = isNearBottom()
-    messages[_pendingIndex].content = _pendingContent
-    if (wasAtBottom && messagesRef.value) {
-      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-    }
-  }
-  _pendingIndex = -1
 }
 
 const route = useRoute()
@@ -426,6 +414,7 @@ function startPolling(pollId, messageIndex) {
         messages.value[messageIndex].streaming = false
         messages.value[messageIndex].pending = false
         messages.value[messageIndex].error = true
+        delete messages.value[messageIndex]._html
       }
       ElMessage.warning('对话响应超时')
       saveState()
@@ -683,14 +672,24 @@ async function handleSend() {
   messages.value.push({ role: 'assistant', content: '', pending: true, streaming: false })
   await scrollToBottom()
 
+  let streamCancelled = false
+
   try {
     // SSE 流式模式
-    const { stream } = await sendChatStream(repoUrl.value, fullQuestion, currentSessionId.value, currentTaskId.value)
+    const { stream, reader } = await sendChatStream(repoUrl.value, fullQuestion, currentSessionId.value, currentTaskId.value)
     messages.value[pendingIndex].pending = false
     messages.value[pendingIndex].streaming = true
-    let tokenCount = 0
     let streamContent = ''
-    let tokenTimer = null
+    let gotDone = false
+
+    // 安全超时：5 分钟无响应才强制停止（正常流程由 done/流关闭驱动）
+    const safetyTimer = setTimeout(() => {
+      if (messages.value[pendingIndex]?.streaming) {
+        streamCancelled = true
+        finishStreaming(pendingIndex)
+        reader.cancel()
+      }
+    }, 300000)
 
     for await (const event of stream) {
       if (event.type === 'session') {
@@ -700,50 +699,30 @@ async function handleSend() {
         }
       } else if (event.type === 'token') {
         streamContent += event.data
-        tokenCount++
-        // 节流：每 100ms 最多更新一次 DOM，滚动由 flushRender 同步处理
-        scheduleRender(streamContent, pendingIndex, messages.value)
-        // 重置超时：5s 无新 token 则自动停止 streaming
-        clearTimeout(tokenTimer)
-        tokenTimer = setTimeout(() => {
-          flushRenderNow(messages.value)
-          if (messages.value[pendingIndex]?.streaming) {
-            messages.value[pendingIndex].streaming = false
-            saveState()
-            nextTick(() => addCodeCopyButtons())
-          }
-        }, 5000)
+        applyStreamContent(streamContent, pendingIndex)
       } else if (event.type === 'done') {
-        clearTimeout(tokenTimer)
-        flushRenderNow(messages.value)
-        messages.value[pendingIndex].streaming = false
-        saveState()
-        nextTick(() => {
-          addCodeCopyButtons()
-          refreshSessions()
-        })
+        gotDone = true
+        clearTimeout(safetyTimer)
+        finishStreaming(pendingIndex)
       } else if (event.type === 'suggestions') {
         try {
           messages.value[pendingIndex].suggestions = JSON.parse(event.data)
         } catch { /* ignore */ }
       } else if (event.type === 'error') {
-        clearTimeout(tokenTimer)
-        flushRenderNow(messages.value)
+        clearTimeout(safetyTimer)
         messages.value[pendingIndex].content = event.data
         messages.value[pendingIndex].error = true
-        messages.value[pendingIndex].streaming = false
-        saveState()
+        finishStreaming(pendingIndex)
       }
     }
-    // 流结束但没收到 done/error，也停止 streaming
-    clearTimeout(tokenTimer)
-    flushRenderNow(messages.value)
-    if (messages.value[pendingIndex]?.streaming) {
-      messages.value[pendingIndex].streaming = false
-      saveState()
-      nextTick(() => addCodeCopyButtons())
+    // 流自然关闭但没收到 done（网络断开等），也结束 streaming
+    if (!gotDone) {
+      clearTimeout(safetyTimer)
+      finishStreaming(pendingIndex)
     }
   } catch (e) {
+    // 安全超时触发的取消，已有内容，不再降级
+    if (streamCancelled) return
     // SSE 不可用，降级到轮询模式
     try {
       const resp = await sendChatAsync(repoUrl.value, fullQuestion, currentSessionId.value, currentTaskId.value)
