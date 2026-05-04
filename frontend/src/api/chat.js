@@ -37,22 +37,31 @@ export async function sendChatStream(repoUrl, question, sessionId, taskId) {
   let buffer = ''
 
   async function* stream() {
+    let eventType = null
+    let eventData = null
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop()
-      let eventType = null
       for (const line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim()
-        } else if (line.startsWith('data:')) {
-          const data = line.slice(5).trim()
-          if (eventType) {
-            yield { type: eventType, data }
-            eventType = null
+        const trimmed = line.replace(/\r$/, '')
+        if (trimmed === '') {
+          if (eventType !== null && eventData !== null) {
+            yield { type: eventType, data: eventData }
           }
+          eventType = null
+          eventData = null
+        } else if (trimmed.startsWith('event:')) {
+          if (eventType !== null && eventData !== null) {
+            yield { type: eventType, data: eventData }
+          }
+          eventType = trimmed.slice(6).trimStart()
+          eventData = null
+        } else if (trimmed.startsWith('data:')) {
+          const chunk = trimmed.slice(5).replace(/^ /, '')
+          eventData = eventData !== null ? eventData + '\n' + chunk : chunk
         }
       }
     }
@@ -106,22 +115,31 @@ export async function sendCrossRepoChatStream(question, taskIds) {
   let buffer = ''
 
   async function* stream() {
+    let eventType = null
+    let eventData = null
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop()
-      let eventType = null
       for (const line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim()
-        } else if (line.startsWith('data:')) {
-          const data = line.slice(5).trim()
-          if (eventType) {
-            yield { type: eventType, data }
-            eventType = null
+        const trimmed = line.replace(/\r$/, '')
+        if (trimmed === '') {
+          if (eventType !== null && eventData !== null) {
+            yield { type: eventType, data: eventData }
           }
+          eventType = null
+          eventData = null
+        } else if (trimmed.startsWith('event:')) {
+          if (eventType !== null && eventData !== null) {
+            yield { type: eventType, data: eventData }
+          }
+          eventType = trimmed.slice(6).trimStart()
+          eventData = null
+        } else if (trimmed.startsWith('data:')) {
+          const chunk = trimmed.slice(5).replace(/^ /, '')
+          eventData = eventData !== null ? eventData + '\n' + chunk : chunk
         }
       }
     }
