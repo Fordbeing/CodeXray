@@ -28,7 +28,8 @@ const form = ref({
   mail_username: '',
   mail_password: '',
   chat_max_history: 20,
-  default_language: 'zh'
+  default_language: 'zh',
+  github_token: ''
 })
 
 const aiConfigured = computed(() =>
@@ -194,7 +195,7 @@ function resetForm() {
     ai_api_key: '', ai_base_url: '', ai_model: '', ai_embedding_model: '', ai_embedding_url: '', ai_max_tokens: 4096,
     mail_enabled: false, mail_host: '', mail_port: 587,
     mail_username: '', mail_password: '',
-    chat_max_history: 20, default_language: 'zh'
+    chat_max_history: 20, default_language: 'zh', github_token: ''
   }
   aiPresets.value = []
   mailPresets.value = []

@@ -316,7 +316,6 @@ import { Location, Link, Clock, Loading, Platform, CircleClose, TrendCharts, Cir
 import { getUserProfile, getUserRepos, getUserStarred } from '../api/github'
 import { LANG_COLORS, formatNumber } from '../utils/format'
 import GitHubIcon from '../components/icons/GitHubIcon.vue'
-import StarIcon from '../components/icons/StarIcon.vue'
 
 const user = ref(null)
 const ghInput = ref('')
@@ -561,8 +560,10 @@ async function initFromUser() {
     ghInput.value = ghUser
     // 优先从缓存加载，不发请求
     if (loadFromCache(ghUser)) return
-    // 缓存不存在，显示输入框让用户点击"加载"
-    ghUsername.value = ''
+    // 缓存不存在，自动加载（用户已登录且有关联 GitHub 账号）
+    if (user.value?.githubUsername) {
+      await loadGithub(ghUser)
+    }
   }
 }
 
