@@ -36,7 +36,7 @@
 
 ## 🎬 项目演示
 
-> 【视频占位】5 分钟功能全景演示 — 从输入仓库链接到获取完整分析报告
+<img width="1905" height="896" alt="整体视频" src="https://github.com/user-attachments/assets/81889a55-c64d-45d6-b09d-ab3e5d52780a" />
 
 <p align="center">
   <video width="100%" controls poster="demo-cover.jpg">
@@ -165,15 +165,21 @@
 
 <img width="1905" height="896" alt="仓库分析" src="https://github.com/user-attachments/assets/950f6105-0a21-4cce-a49d-b7dd4da95958" />
 
-> 【截图占位】架构依赖图 — 交互式 DAG 展示模块间依赖关系
+### 架构依赖图 — 交互式 DAG 展示模块间依赖关系
 
-> 【截图占位】AI 代码导览 — 自动推荐项目中最重要的文件并给出导读说明
+<img width="1905" height="896" alt="架构依赖图" src="https://github.com/user-attachments/assets/dea3f7ee-e365-4a66-b8b2-d327a56bb166" />
+
+### AI 代码导览 — 自动推荐项目中最重要的文件并给出导读说明
+
+<img width="1905" height="896" alt="AI代码导览" src="https://github.com/user-attachments/assets/ca788451-9671-4f99-b5bf-8861dde99adb" />
 
 ### 代码问答 — SSE 流式输出 + Markdown 实时渲染 + 代码高亮 + 追问建议
 
 <img width="1905" height="896" alt="代码问答" src="https://github.com/user-attachments/assets/c305dcba-1ea3-4cee-8adf-db83640e4df1" />
 
-> 【截图占位】跨仓库问答 — 同时选中多个仓库进行跨项目对比问答
+### 跨仓库问答 — 同时选中多个仓库进行跨项目对比问答
+
+<img width="1905" height="896" alt="跨仓库问答" src="https://github.com/user-attachments/assets/356714fd-e271-4cf4-990f-6fa76ef3a2e7" />
 
 ### AI 代码审查 — Diff 审查 + 文件审查 + 逐 Hunk 评分 + 审查历史
 
@@ -187,17 +193,17 @@
 
 <img width="1905" height="896" alt="热点推送" src="https://github.com/user-attachments/assets/83ccab74-662e-4dfe-a5ae-8ebb3871b77e" />
 
-> 【截图占位】邮件订阅 — 每日热点日报推送配置界面
+### 邮件订阅 — 每日热点日报推送配置界面
+
+<img width="849" height="812" alt="邮件推送" src="https://github.com/user-attachments/assets/d5730eab-b68e-4ac4-9574-f7a10abda694" />
 
 ### 系统设置 — 9 大 AI 服务商预设 + 一键连接测试
 
 <img width="1905" height="896" alt="系统设置" src="https://github.com/user-attachments/assets/cb15ce0d-8b68-4f43-8ff8-2037420a3daa" />
 
-> 【截图占位】GitHub 项目概览 — 用户画像 / 仓库搜索 / Star 排行 / 语言分布
+### 代码浏览器 — 文件树 + 源码查看 + 全文搜索 + 引用到对话
 
-> 【截图占位】代码浏览器 — 文件树 + 源码查看 + 全文搜索 + 引用到对话
-
-> 【截图占位】分析历史 — 搜索 / 筛选 / 排序 / 分页，快捷跳转报告和问答
+<img width="1905" height="896" alt="AI代码浏览器" src="https://github.com/user-attachments/assets/a1726e54-15e7-42b2-9ee7-b22b7bcd4a29" />
 
 ---
 
