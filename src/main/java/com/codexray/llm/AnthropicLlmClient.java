@@ -278,7 +278,7 @@ public class AnthropicLlmClient implements LlmClient {
 
         WebClient wc = getWebClient();
 
-        for (int attempt = 1; attempt <= 3; attempt++) {
+        for (int attempt = 1; attempt <= 5; attempt++) {
             try {
                 String responseBody = wc.post()
                         .uri("/v1/messages")
@@ -291,23 +291,31 @@ public class AnthropicLlmClient implements LlmClient {
                                             log.error("Anthropic API error {} — body: {}", response.statusCode().value(),
                                                     body.substring(0, Math.min(1000, body.length())));
                                             return reactor.core.publisher.Mono.error(
-                                                    new RuntimeException("Anthropic API " + response.statusCode().value() + ": " + body));
+                                                    new RateLimitException("Anthropic API " + response.statusCode().value() + ": " + body,
+                                                            response.statusCode().value()));
                                         });
                             }
                             return response.bodyToMono(String.class);
                         })
-                        .timeout(Duration.ofSeconds(45))
+                        .timeout(Duration.ofSeconds(120))
                         .block();
 
                 return extractContent(responseBody);
             } catch (Exception e) {
-                log.warn("LLM API call attempt {}/3 failed: {}", attempt, e.getMessage());
-                if (attempt == 3) {
-                    log.error("LLM API call failed after 3 attempts", e);
+                int statusCode = extractStatusCode(e);
+                boolean isRateLimit = statusCode == 429;
+                log.warn("LLM API call attempt {}/5 failed ({}): {}", attempt,
+                        isRateLimit ? "rate-limited" : "error", e.getMessage());
+                if (attempt == 5) {
+                    log.error("LLM API call failed after 5 attempts", e);
                     throw new RuntimeException("LLM API call failed: " + e.getMessage(), e);
                 }
+                long delayMs = isRateLimit
+                        ? Math.min((long) (1000 * Math.pow(2, attempt - 1)) + (long) (Math.random() * 500), 30000)
+                        : 500L * attempt;
+                log.info("Retrying in {}ms...", delayMs);
                 try {
-                    Thread.sleep(500L * attempt);
+                    Thread.sleep(delayMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during retry", ie);
@@ -328,7 +336,7 @@ public class AnthropicLlmClient implements LlmClient {
 
         WebClient wc = getWebClient();
 
-        for (int attempt = 1; attempt <= 3; attempt++) {
+        for (int attempt = 1; attempt <= 5; attempt++) {
             try {
                 java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
                 java.util.concurrent.atomic.AtomicReference<RuntimeException> streamError = new java.util.concurrent.atomic.AtomicReference<>();
@@ -346,7 +354,8 @@ public class AnthropicLlmClient implements LlmClient {
                                                     response.statusCode().value(),
                                                     body.substring(0, Math.min(1000, body.length())));
                                             return reactor.core.publisher.Flux.error(
-                                                    new RuntimeException("Anthropic API " + response.statusCode().value() + ": " + body));
+                                                    new RateLimitException("Anthropic API " + response.statusCode().value() + ": " + body,
+                                                            response.statusCode().value()));
                                         });
                             }
                             return response.bodyToFlux(String.class);
@@ -404,13 +413,20 @@ public class AnthropicLlmClient implements LlmClient {
                 }
                 return;
             } catch (Exception e) {
-                log.warn("LLM stream call attempt {}/3 failed: {}", attempt, e.getMessage());
-                if (attempt == 3) {
-                    log.error("LLM stream call failed after 3 attempts", e);
+                int statusCode = extractStatusCode(e);
+                boolean isRateLimit = statusCode == 429;
+                log.warn("LLM stream call attempt {}/5 failed ({}): {}", attempt,
+                        isRateLimit ? "rate-limited" : "error", e.getMessage());
+                if (attempt == 5) {
+                    log.error("LLM stream call failed after 5 attempts", e);
                     throw new RuntimeException("LLM stream call failed: " + e.getMessage(), e);
                 }
+                long delayMs = isRateLimit
+                        ? Math.min((long) (1000 * Math.pow(2, attempt - 1)) + (long) (Math.random() * 500), 30000)
+                        : 500L * attempt;
+                log.info("Retrying in {}ms...", delayMs);
                 try {
-                    Thread.sleep(500L * attempt);
+                    Thread.sleep(delayMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during retry", ie);
@@ -474,5 +490,34 @@ public class AnthropicLlmClient implements LlmClient {
             trimmed = trimmed.substring(0, trimmed.length() - 3);
         }
         return trimmed.trim();
+    }
+
+    private int extractStatusCode(Exception e) {
+        Throwable t = e;
+        while (t != null) {
+            if (t instanceof RateLimitException rle) {
+                return rle.statusCode();
+            }
+            // 从异常消息中提取 "Anthropic API 429:" 格式
+            String msg = t.getMessage();
+            if (msg != null && msg.startsWith("Anthropic API ")) {
+                try {
+                    return Integer.parseInt(msg.substring(14, msg.indexOf(':')));
+                } catch (NumberFormatException ignored) {}
+            }
+            t = t.getCause();
+        }
+        return -1;
+    }
+
+    private static class RateLimitException extends RuntimeException {
+        private final int statusCode;
+
+        RateLimitException(String message, int statusCode) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        int statusCode() { return statusCode; }
     }
 }
