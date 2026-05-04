@@ -480,7 +480,7 @@ function startPolling(pollId, messageIndex) {
         }
         saveState()
         scrollToBottomIfNear()
-        loadSessions().then(() => nextTick(() => addCodeCopyButtons()))
+        refreshSessions().then(() => nextTick(() => addCodeCopyButtons()))
       }
     } catch (e) {
       failCount++
@@ -506,6 +506,16 @@ function startPolling(pollId, messageIndex) {
   let timer = setInterval(doPoll, 800)
 
   activePolls.set(pollId, { timer, messageIndex })
+}
+
+// 只刷新会话列表（侧边栏预览），不覆盖当前消息
+// 用于流式输出完成后的场景：消息已在本地，只需更新侧边栏
+async function refreshSessions() {
+  try {
+    sessions.value = await listChatSessions() || []
+  } catch (e) {
+    console.error('刷新会话列表失败:', e)
+  }
 }
 
 async function loadSessions() {
@@ -693,7 +703,7 @@ async function handleSend() {
         tokenCount++
         // 节流：每 100ms 最多更新一次 DOM，滚动由 flushRender 同步处理
         scheduleRender(streamContent, pendingIndex, messages.value)
-        // 重置超时：1.5s 无新 token 则自动停止 streaming
+        // 重置超时：5s 无新 token 则自动停止 streaming
         clearTimeout(tokenTimer)
         tokenTimer = setTimeout(() => {
           flushRenderNow(messages.value)
@@ -702,7 +712,7 @@ async function handleSend() {
             saveState()
             nextTick(() => addCodeCopyButtons())
           }
-        }, 1500)
+        }, 5000)
       } else if (event.type === 'done') {
         clearTimeout(tokenTimer)
         flushRenderNow(messages.value)
@@ -710,7 +720,7 @@ async function handleSend() {
         saveState()
         nextTick(() => {
           addCodeCopyButtons()
-          loadSessions()
+          refreshSessions()
         })
       } else if (event.type === 'suggestions') {
         try {

@@ -108,3 +108,17 @@ CREATE TABLE IF NOT EXISTS comparison_record (
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_compare_user (user_id)
 );
+
+CREATE TABLE IF NOT EXISTS share_link (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    share_token         VARCHAR(16)   NOT NULL UNIQUE,
+    task_id             VARCHAR(64)   NOT NULL,
+    user_id             BIGINT        NOT NULL,
+    password_protected  BOOLEAN       DEFAULT FALSE,
+    password_hash       VARCHAR(255),
+    expires_at          DATETIME,
+    view_count          INT           DEFAULT 0,
+    created_at          TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_share_task (task_id),
+    INDEX idx_share_user (user_id)
+);

@@ -30,7 +30,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { listTasks } from '../api/analysis'
+import { listTasks, getUserStats } from '../api/analysis'
 import { getTodayTrending } from '../api/trending'
 import { getStatusInfo, shortenUrl } from '../utils/status'
 import { formatNumber, formatRelative } from '../utils/format'
@@ -46,6 +46,7 @@ const allTasks = ref([])
 const hotRepos = ref([])
 const user = ref(null)
 const loading = ref(false)
+const userStats = ref(null)
 
 const quickActions = [
   { path: '/analyze', label: '仓库分析', desc: '输入仓库地址，深度分析代码', icon: Search, bg: '#f0fdf4', color: '#2da44e' },
@@ -70,11 +71,12 @@ const greeting = computed(() => {
 // ========== 区块定义 ==========
 const STORAGE_KEY = 'codexray_dashboard_layout'
 
-const defaultOrder = ['welcome', 'stats', 'recent', 'trending', 'actions', 'trend']
+const defaultOrder = ['welcome', 'stats', 'heatmap', 'recent', 'trending', 'actions', 'trend']
 
 const blockDefs = {
   welcome: { id: 'welcome', span: 12, spanSm: 12, spanXs: 12, component: null },
   stats:   { id: 'stats',   span: 12, spanSm: 12, spanXs: 12, component: null },
+  heatmap: { id: 'heatmap', span: 12, spanSm: 12, spanXs: 12, component: null },
   recent:  { id: 'recent',  span: 7,  spanSm: 12, spanXs: 12, component: null },
   trending:{ id: 'trending',span: 5,  spanSm: 6,  spanXs: 12, component: null },
   actions: { id: 'actions', span: 5,  spanSm: 6,  spanXs: 12, component: null },
@@ -289,6 +291,99 @@ const TrendBlock = {
   },
 }
 
+// 分析热力图
+const HeatmapBlock = {
+  setup() {
+    return () => {
+      const heatmap = userStats.value?.heatmap || []
+      // 构建最近 180 天的日期网格（26 周 x 7 天）
+      const now = new Date()
+      const days = []
+      const countMap = {}
+      for (const d of heatmap) {
+        countMap[d.date] = d.count
+      }
+      for (let i = 179; i >= 0; i--) {
+        const d = new Date(now)
+        d.setDate(d.getDate() - i)
+        const key = d.toISOString().slice(0, 10)
+        days.push({ date: key, count: countMap[key] || 0, day: d.getDay() })
+      }
+      // 按周分组
+      const weeks = []
+      let currentWeek = []
+      for (const day of days) {
+        if (currentWeek.length > 0 && day.day === 0) {
+          weeks.push(currentWeek)
+          currentWeek = []
+        }
+        currentWeek.push(day)
+      }
+      if (currentWeek.length > 0) weeks.push(currentWeek)
+
+      function heatColor(count) {
+        if (count === 0) return '#ebedf0'
+        if (count <= 2) return '#9be9a8'
+        if (count <= 5) return '#40c463'
+        if (count <= 10) return '#30a14e'
+        return '#216e39'
+      }
+
+      return h('div', { class: 'section-card heatmap-card' }, [
+        h('div', { class: 'section-header' }, [
+          h('span', { class: 'section-title' }, '分析热力图'),
+          h('span', { class: 'heatmap-sub' }, '最近 180 天'),
+        ]),
+        h('div', { class: 'heatmap-grid' },
+          weeks.map((week, wi) =>
+            h('div', { class: 'heatmap-col', key: wi },
+              week.map((day, di) =>
+                h('div', {
+                  class: 'heatmap-cell',
+                  key: di,
+                  style: `background:${heatColor(day.count)}`,
+                  title: `${day.date}: ${day.count} 次分析`,
+                })
+              )
+            )
+          )
+        ),
+        h('div', { class: 'heatmap-legend' }, [
+          h('span', {}, '少'),
+          ...[0, 2, 5, 10].map((v, i) =>
+            h('div', {
+              class: 'heatmap-legend-cell',
+              style: `background:${heatColor(v + 1)}`,
+              key: i,
+            })
+          ),
+          h('span', {}, '多'),
+        ]),
+        // 语言分布
+        userStats.value?.topLanguages?.length > 0
+          ? h('div', { class: 'lang-section' }, [
+              h('div', { class: 'lang-title' }, '常分析的语言'),
+              h('div', { class: 'lang-bars' },
+                userStats.value.topLanguages.map((l, i) =>
+                  h('div', { class: 'lang-bar-item', key: i }, [
+                    h('span', { class: 'lang-label' }, l.language),
+                    h('div', { class: 'lang-track' }, [
+                      h('div', {
+                        class: 'lang-fill',
+                        style: `width:${l.percentage}%`,
+                      }),
+                    ]),
+                    h('span', { class: 'lang-pct' }, l.percentage + '%'),
+                  ])
+                )
+              ),
+            ])
+          : null,
+      ])
+    }
+  },
+}
+
 // ========== 区块顺序 ==========
 const blockOrder = ref([...defaultOrder])
 
@@ -313,6 +408,7 @@ function saveOrder() {
 const componentMap = {
   welcome: WelcomeBlock,
   stats: StatsBlock,
+  heatmap: HeatmapBlock,
   recent: RecentBlock,
   trending: TrendingBlock,
   actions: ActionsBlock,
@@ -387,13 +483,15 @@ async function reloadDashboard() {
   loadOrder()
   loading.value = true
   try {
-    const [tasks, repos] = await Promise.all([
-      listTasks(5).catch(() => []),
-      getTodayTrending().catch(() => [])
+    const [tasks, repos, stats] = await Promise.all([
+      listTasks(50).catch(() => []),
+      getTodayTrending().catch(() => []),
+      getUserStats().catch(() => null),
     ])
     allTasks.value = tasks || []
     recentTasks.value = (tasks || []).slice(0, 5)
     hotRepos.value = (repos || []).slice(0, 5)
+    userStats.value = stats
   } finally {
     loading.value = false
   }
@@ -670,6 +768,55 @@ onUnmounted(() => {
 .grid-item:deep(.pending-url) {
   font-size: 13px; color: #1f2328; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ===== 热力图 ===== */
+.grid-item:deep(.heatmap-card) {
+  background: #fff; border: 1px solid #d8dee4; border-radius: 14px;
+  padding: 20px 22px;
+}
+.grid-item:deep(.heatmap-sub) {
+  font-size: 12px; color: #8b949e; font-weight: 400;
+}
+.grid-item:deep(.heatmap-grid) {
+  display: flex; gap: 3px; overflow-x: auto; padding: 8px 0;
+}
+.grid-item:deep(.heatmap-col) {
+  display: flex; flex-direction: column; gap: 3px;
+}
+.grid-item:deep(.heatmap-cell) {
+  width: 12px; height: 12px; border-radius: 2px;
+}
+.grid-item:deep(.heatmap-legend) {
+  display: flex; align-items: center; gap: 4px; margin-top: 8px; justify-content: flex-end;
+  font-size: 11px; color: #8b949e;
+}
+.grid-item:deep(.heatmap-legend-cell) {
+  width: 12px; height: 12px; border-radius: 2px;
+}
+.grid-item:deep(.lang-section) {
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid #f0f2f5;
+}
+.grid-item:deep(.lang-title) {
+  font-size: 13px; font-weight: 600; color: #656d76; margin-bottom: 10px;
+}
+.grid-item:deep(.lang-bars) {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.grid-item:deep(.lang-bar-item) {
+  display: flex; align-items: center; gap: 8px;
+}
+.grid-item:deep(.lang-label) {
+  width: 80px; font-size: 12px; color: #656d76; text-align: right;
+}
+.grid-item:deep(.lang-track) {
+  flex: 1; height: 8px; background: #f0f2f5; border-radius: 4px; overflow: hidden;
+}
+.grid-item:deep(.lang-fill) {
+  height: 100%; background: linear-gradient(90deg, #2da44e, #56d364); border-radius: 4px; transition: width 0.5s;
+}
+.grid-item:deep(.lang-pct) {
+  width: 36px; font-size: 11px; color: #8b949e; text-align: right;
 }
 
 /* ===== 响应式 ===== */

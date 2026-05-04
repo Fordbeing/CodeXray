@@ -6,6 +6,7 @@ import com.codexray.model.dto.ChatMessage;
 import com.codexray.model.dto.ChatPending;
 import com.codexray.model.dto.ChatRequest;
 import com.codexray.model.dto.ChatResponse;
+import com.codexray.model.dto.CrossRepoChatRequest;
 import com.codexray.service.CodeChatService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -58,7 +59,7 @@ public class ChatController {
             @RequestParam(required = false) String repoUrl,
             @RequestParam(required = false) String taskId) {
         Long userId = CurrentUser.get();
-        SseEmitter emitter = new SseEmitter(120_000L);
+        SseEmitter emitter = new SseEmitter(300_000L);
         sseExecutor.execute(() -> {
             try {
                 codeChatService.askStreaming(sessionId, repoUrl, taskId, question, userId, emitter);
@@ -118,5 +119,28 @@ public class ChatController {
     public Result<String> exportSession(@PathVariable String sessionId,
                                         @RequestParam(defaultValue = "md") String format) {
         return Result.ok(codeChatService.exportAsMarkdown(sessionId));
+    }
+
+    /** 跨仓库 SSE 流式问答 */
+    @GetMapping(value = "/cross-repo/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter crossRepoStream(
+            @RequestParam String question,
+            @RequestParam(required = false) String taskIds) {
+        Long userId = CurrentUser.get();
+        List<String> taskIdList = (taskIds != null && !taskIds.isBlank())
+                ? List.of(taskIds.split(","))
+                : List.of();
+        SseEmitter emitter = new SseEmitter(300_000L);
+        sseExecutor.execute(() -> {
+            try {
+                codeChatService.chatAcrossReposStreaming(userId, question, taskIdList, emitter);
+            } catch (Exception e) {
+                try {
+                    emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
+                } catch (IOException ignored) {}
+                emitter.completeWithError(e);
+            }
+        });
+        return emitter;
     }
 }

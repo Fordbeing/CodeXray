@@ -6,8 +6,11 @@ import com.codexray.agent.AnalysisPipeline;
 import com.codexray.common.CurrentUser;
 import com.codexray.mapper.CodeChunkMapper;
 import com.codexray.mapper.AnalysisTaskMapper;
+import com.codexray.mapper.ChatHistoryMapper;
+import com.codexray.mapper.CodeReviewRecordMapper;
 import com.codexray.model.dto.AnalysisResultResponse;
 import com.codexray.model.dto.RepoPreviewResponse;
+import com.codexray.model.dto.UserAnalysisStats;
 import com.codexray.model.entity.AnalysisTask;
 import com.codexray.rag.VectorStoreService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -22,6 +25,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.*;
 import java.nio.file.*;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.zip.ZipEntry;
@@ -38,6 +42,8 @@ public class AnalysisService {
 
     private final AnalysisTaskMapper taskMapper;
     private final CodeChunkMapper codeChunkMapper;
+    private final ChatHistoryMapper chatHistoryMapper;
+    private final CodeReviewRecordMapper codeReviewRecordMapper;
     private final GitCloneService gitCloneService;
     private final CodeReaderService codeReaderService;
     private final AnalysisPipeline analysisPipeline;
@@ -47,12 +53,15 @@ public class AnalysisService {
     private final ObjectMapper objectMapper;
 
     public AnalysisService(AnalysisTaskMapper taskMapper, CodeChunkMapper codeChunkMapper,
+                           ChatHistoryMapper chatHistoryMapper, CodeReviewRecordMapper codeReviewRecordMapper,
                            GitCloneService gitCloneService,
                            CodeReaderService codeReaderService, AnalysisPipeline analysisPipeline,
                            VectorStoreService vectorStoreService, MinioService minioService,
                            RedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper) {
         this.taskMapper = taskMapper;
         this.codeChunkMapper = codeChunkMapper;
+        this.chatHistoryMapper = chatHistoryMapper;
+        this.codeReviewRecordMapper = codeReviewRecordMapper;
         this.gitCloneService = gitCloneService;
         this.codeReaderService = codeReaderService;
         this.analysisPipeline = analysisPipeline;
@@ -343,6 +352,71 @@ public class AnalysisService {
                 gitCloneService.cleanup(localPath);
             }
         }
+    }
+
+    public UserAnalysisStats getUserStats(Long userId) {
+        if (userId == null) {
+            return new UserAnalysisStats(0, 0, 0, 0, List.of(), List.of());
+        }
+
+        // 总分析数
+        Long totalAnalyses = taskMapper.selectCount(
+                new QueryWrapper<AnalysisTask>().eq("user_id", userId)
+        );
+        // 完成分析数
+        Long completedAnalyses = taskMapper.selectCount(
+                new QueryWrapper<AnalysisTask>().eq("user_id", userId).eq("status", "COMPLETED")
+        );
+        // 总问答数
+        Long totalChats = chatHistoryMapper.selectCount(
+                new QueryWrapper<com.codexray.model.entity.ChatHistory>().eq("user_id", userId)
+        );
+        // 总审查数
+        Long totalReviews = codeReviewRecordMapper.selectCount(
+                new QueryWrapper<com.codexray.model.entity.CodeReviewRecord>().eq("user_id", userId)
+        );
+
+        // 热力图：最近 180 天每天的分析次数
+        LocalDate start = LocalDate.now().minusDays(179);
+        List<AnalysisTask> recentTasks = taskMapper.selectList(
+                new QueryWrapper<AnalysisTask>()
+                        .eq("user_id", userId)
+                        .ge("created_at", start.atStartOfDay())
+                        .select("DATE(created_at) as created_at")
+        );
+        Map<LocalDate, Long> dayCounts = new HashMap<>();
+        for (AnalysisTask t : recentTasks) {
+            LocalDate date = t.getCreatedAt() != null ? t.getCreatedAt().toLocalDate() : null;
+            if (date != null) {
+                dayCounts.merge(date, 1L, Long::sum);
+            }
+        }
+        List<UserAnalysisStats.DailyCount> heatmap = new ArrayList<>();
+        for (int i = 0; i < 180; i++) {
+            LocalDate d = start.plusDays(i);
+            heatmap.add(new UserAnalysisStats.DailyCount(d, dayCounts.getOrDefault(d, 0L).intValue()));
+        }
+
+        // 最近分析的仓库
+        List<AnalysisTask> recent = taskMapper.selectList(
+                new QueryWrapper<AnalysisTask>()
+                        .eq("user_id", userId)
+                        .orderByDesc("created_at")
+                        .last("LIMIT 5")
+        );
+        List<UserAnalysisStats.RepoSummary> recentRepos = recent.stream()
+                .map(t -> new UserAnalysisStats.RepoSummary(
+                        t.getTaskId(), t.getRepoUrl(), t.getStatus(), t.getCreatedAt()))
+                .toList();
+
+        return new UserAnalysisStats(
+                totalAnalyses.intValue(),
+                completedAnalyses.intValue(),
+                totalChats.intValue(),
+                totalReviews.intValue(),
+                heatmap,
+                recentRepos
+        );
     }
 
     private void updateStatus(Long id, String status) {

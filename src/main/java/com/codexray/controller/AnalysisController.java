@@ -12,6 +12,9 @@ import com.codexray.model.dto.RepoPreviewResponse;
 import com.codexray.model.entity.ComparisonRecord;
 import com.codexray.rag.VectorStoreService;
 import com.codexray.service.AnalysisService;
+import com.codexray.service.ArchitectureService;
+import com.codexray.service.CodeTourService;
+import com.codexray.service.ShareService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,16 +36,24 @@ public class AnalysisController {
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
     private final ComparisonRecordMapper comparisonRecordMapper;
+    private final ArchitectureService architectureService;
+    private final CodeTourService codeTourService;
+    private final ShareService shareService;
 
     public AnalysisController(AnalysisService analysisService, VectorStoreService vectorStoreService,
                               ReporterAgent reporterAgent, LlmClient llmClient, ObjectMapper objectMapper,
-                              ComparisonRecordMapper comparisonRecordMapper) {
+                              ComparisonRecordMapper comparisonRecordMapper,
+                              ArchitectureService architectureService,
+                              CodeTourService codeTourService, ShareService shareService) {
         this.analysisService = analysisService;
         this.vectorStoreService = vectorStoreService;
         this.reporterAgent = reporterAgent;
         this.llmClient = llmClient;
         this.objectMapper = objectMapper;
         this.comparisonRecordMapper = comparisonRecordMapper;
+        this.architectureService = architectureService;
+        this.codeTourService = codeTourService;
+        this.shareService = shareService;
     }
 
     @PostMapping("/analyze")
@@ -336,6 +347,55 @@ public class AnalysisController {
         QueryWrapper<ComparisonRecord> wrapper = new QueryWrapper<>();
         wrapper.eq("comparison_id", comparisonId);
         comparisonRecordMapper.delete(wrapper);
+        return Result.ok(null);
+    }
+
+    /** 获取架构图数据 */
+    @GetMapping("/{taskId}/graph")
+    public Result<com.codexray.model.dto.ArchitectureGraph> architectureGraph(@PathVariable String taskId) {
+        return Result.ok(architectureService.buildGraph(taskId));
+    }
+
+    /** 获取用户分析统计 */
+    @GetMapping("/stats")
+    public Result<com.codexray.model.dto.UserAnalysisStats> userStats() {
+        return Result.ok(analysisService.getUserStats(CurrentUser.get()));
+    }
+
+    /** 获取 AI 代码导览 */
+    @GetMapping("/{taskId}/tour")
+    public Result<com.codexray.model.dto.CodeTour> codeTour(@PathVariable String taskId) {
+        return Result.ok(codeTourService.generateTour(taskId));
+    }
+
+    /** 创建分享链接 */
+    @PostMapping("/{taskId}/share")
+    public Result<Map<String, Object>> createShare(@PathVariable String taskId,
+                                                   @RequestBody(required = false) Map<String, Object> body) {
+        Long userId = CurrentUser.get();
+        String password = body != null ? (String) body.get("password") : null;
+        int expiresInDays = body != null && body.get("expiresInDays") != null
+                ? ((Number) body.get("expiresInDays")).intValue() : 0;
+        return Result.ok(shareService.createShare(taskId, userId, password, expiresInDays));
+    }
+
+    /** 查看分享报告（公开接口） */
+    @GetMapping("/shared/{shareToken}")
+    public Result<Map<String, Object>> getSharedReport(@PathVariable String shareToken,
+                                                       @RequestParam(required = false) String password) {
+        return Result.ok(shareService.getSharedReport(shareToken, password));
+    }
+
+    /** 列出我的分享 */
+    @GetMapping("/shares")
+    public Result<List<Map<String, Object>>> listShares() {
+        return Result.ok(shareService.listShares(CurrentUser.get()));
+    }
+
+    /** 撤销分享 */
+    @DeleteMapping("/shares/{shareToken}")
+    public Result<Void> revokeShare(@PathVariable String shareToken) {
+        shareService.revokeShare(shareToken, CurrentUser.get());
         return Result.ok(null);
     }
 

@@ -68,6 +68,16 @@
         </div>
       </div>
 
+      <!-- 雷达图对比 -->
+      <div v-if="radarScoresA || radarScoresB" class="radar-compare-card">
+        <h3>维度对比雷达图</h3>
+        <RadarChart
+          :scores="radarScoresA"
+          :compare-scores="radarScoresB"
+          :size="360"
+        />
+      </div>
+
       <div class="comparison-summary">
         <h3>对比分析</h3>
         <div class="summary-content" v-html="renderMarkdown(result.comparison)"></div>
@@ -135,6 +145,7 @@ import { Right, DataAnalysis, Top, Bottom, Delete } from '@element-plus/icons-vu
 import { compareReports, listTasksForCompare, listComparisonRecords, getComparisonRecord, deleteComparisonRecord } from '../api/compare'
 import { reportToMarkdown, parseReport } from '../utils/reportMarkdown'
 import { marked } from 'marked'
+import RadarChart from '../components/chart/RadarChart.vue'
 
 // 对比历史
 const historyRecords = ref([])
@@ -185,6 +196,22 @@ const scoreDiffClass = computed(() => {
   if (result.value.scoreDiff > 0) return 'diff-up'
   if (result.value.scoreDiff < 0) return 'diff-down'
   return 'diff-same'
+})
+
+const radarScoresA = computed(() => {
+  if (!result.value?.taskA?.report) return null
+  try {
+    const r = typeof result.value.taskA.report === 'string' ? JSON.parse(result.value.taskA.report) : result.value.taskA.report
+    return r.scoreDetails || null
+  } catch { return null }
+})
+
+const radarScoresB = computed(() => {
+  if (!result.value?.taskB?.report) return null
+  try {
+    const r = typeof result.value.taskB.report === 'string' ? JSON.parse(result.value.taskB.report) : result.value.taskB.report
+    return r.scoreDetails || null
+  } catch { return null }
 })
 
 function formatRepoLabel(group) {
@@ -312,6 +339,22 @@ onMounted(() => {
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 16px;
+}
+
+.radar-compare-card {
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.radar-compare-card h3 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2328;
 }
 
 .score-diff-header {
