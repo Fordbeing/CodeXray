@@ -10,6 +10,7 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
 /**
@@ -20,6 +21,9 @@ import java.util.stream.Collectors;
 public class AnalyzerAgent {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzerAgent.class);
+
+    /** 限制同时发起的 LLM 请求数，避免触发 API 429 限流 */
+    private static final Semaphore LLM_SEMAPHORE = new Semaphore(4);
 
     private final LlmClient llmClient;
     private final VectorStoreService vectorStoreService;
@@ -103,11 +107,16 @@ public class AnalyzerAgent {
 
             String ctx = codeContext.toString();
             fileFutures.add(executor.submit(() -> {
-                String systemPrompt = "你是一个专业的代码分析专家。请基于提供的代码内容进行分析，" +
-                        "指出该文件的具体职责、关键类/方法、与其他模块的关系。" +
-                        "要求：基于实际代码内容分析，不要泛泛而谈，引用具体的类名和方法名。";
-                return llmClient.chat(systemPrompt,
-                        "分析以下代码文件的职责和关键方法，用 1-2 句话总结：\n\n" + ctx);
+                LLM_SEMAPHORE.acquireUninterruptibly();
+                try {
+                    String systemPrompt = "你是一个专业的代码分析专家。请基于提供的代码内容进行分析，" +
+                            "指出该文件的具体职责、关键类/方法、与其他模块的关系。" +
+                            "要求：基于实际代码内容分析，不要泛泛而谈，引用具体的类名和方法名。";
+                    return llmClient.chat(systemPrompt,
+                            "分析以下代码文件的职责和关键方法，用 1-2 句话总结：\n\n" + ctx);
+                } finally {
+                    LLM_SEMAPHORE.release();
+                }
             }));
         }
 
@@ -134,7 +143,12 @@ public class AnalyzerAgent {
                 String reducePrompt = "以下是 " + category + " 模块中各文件的分析结果，"
                         + "请合并为一段简洁的模块级摘要（3-5 句话），体现该模块的独特功能和设计特点：\n\n"
                         + String.join("\n", fileAnalyses);
-                moduleSummary = llmClient.chat(reduceSystemPrompt, reducePrompt);
+                LLM_SEMAPHORE.acquireUninterruptibly();
+                try {
+                    moduleSummary = llmClient.chat(reduceSystemPrompt, reducePrompt);
+                } finally {
+                    LLM_SEMAPHORE.release();
+                }
             } catch (Exception e) {
                 moduleSummary = String.join("; ", fileAnalyses.stream()
                         .limit(5).toList());
