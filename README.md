@@ -103,6 +103,10 @@
 
 ## 效果展示
 
+### 邮件订阅 - 样式精美
+
+<img width="849" height="812" alt="邮件推送" src="https://github.com/user-attachments/assets/15a3c9ea-3fea-4b00-a944-67d1fe9fb715" />
+
 ### 仪表盘 — 欢迎卡片 + 统计概览 + 最近分析 + 热点速览
 
 <img width="1905" height="896" alt="仪表盘" src="https://github.com/user-attachments/assets/7e633603-6c0c-4f75-abe3-571108a5f6dc" />
