@@ -32,6 +32,7 @@
     <div class="settings-grid" v-loading="loading">
       <SettingsAI ref="settingsAiRef" />
       <SettingsMail />
+      <SettingsGitHub />
       <SettingsChat />
     </div>
   </div>
@@ -43,6 +44,7 @@ import { useSettingsForm } from '../composables/useSettingsForm'
 import SettingsAI from '../components/settings/SettingsAI.vue'
 import SettingsMail from '../components/settings/SettingsMail.vue'
 import SettingsChat from '../components/settings/SettingsChat.vue'
+import SettingsGitHub from '../components/settings/SettingsGitHub.vue'
 import {
   WarningFilled, InfoFilled,
   CircleCheckFilled, CircleCloseFilled, Loading
