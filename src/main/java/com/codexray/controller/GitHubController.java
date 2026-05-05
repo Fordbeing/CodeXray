@@ -55,6 +55,41 @@ public class GitHubController {
         }
     }
 
+    @GetMapping("/users/{username}/events")
+    public Result<List<Map<String, Object>>> getUserEvents(
+            @PathVariable String username,
+            @RequestParam(defaultValue = "100") int per_page) {
+        try {
+            return Result.ok(gitHubService.getUserEvents(username, per_page));
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    @GetMapping("/users/{username}/orgs")
+    public Result<List<Map<String, Object>>> getUserOrgs(@PathVariable String username) {
+        try {
+            return Result.ok(gitHubService.getUserOrgs(username));
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    @GetMapping("/users/{username}/stats")
+    public Result<Map<String, Object>> getUserRepoStats(@PathVariable String username) {
+        try {
+            return Result.ok(gitHubService.getUserRepoStats(username));
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
     @PostMapping("/users/{username}/refresh")
     public Result<Void> refreshCache(@PathVariable String username) {
         gitHubService.refreshCache(username);
