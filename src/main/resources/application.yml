@@ -22,9 +22,9 @@ codexray:
     enabled: ${MAIL_ENABLED:false}
   elasticsearch:
     host: ${ES_HOST:localhost}
-    port: ${ES_PORT:9200}
+    port: ${ES_PORT:9201}
   minio:
-    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9001}
     access-key: ${MINIO_ACCESS_KEY:codexray}
     secret-key: ${MINIO_SECRET_KEY:codexray123}
     bucket: ${MINIO_BUCKET:codexray}
@@ -37,7 +37,7 @@ spring:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      port: ${REDIS_PORT:6380}
       password: ${REDIS_PASSWORD:}
       timeout: 5000
   mail:
