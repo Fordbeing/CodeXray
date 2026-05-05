@@ -197,6 +197,10 @@
 
 <img width="849" height="812" alt="邮件推送" src="https://github.com/user-attachments/assets/d5730eab-b68e-4ac4-9574-f7a10abda694" />
 
+### 我的 Github 页面信息
+
+<img width="1905" height="896" alt="我的github" src="https://github.com/user-attachments/assets/9b130b9a-beb0-4e4e-8c04-92b318c822ed" />
+
 ### 系统设置 — 9 大 AI 服务商预设 + 一键连接测试
 
 <img width="1905" height="896" alt="系统设置" src="https://github.com/user-attachments/assets/cb15ce0d-8b68-4f43-8ff8-2037420a3daa" />
