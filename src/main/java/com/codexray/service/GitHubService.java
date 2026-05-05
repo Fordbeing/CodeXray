@@ -130,6 +130,141 @@ public class GitHubService {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getUserEvents(String username, int perPage) {
+        String cacheKey = CACHE_PREFIX + "events:" + username + ":" + perPage;
+        List<Map<String, Object>> cached = getFromCacheList(cacheKey);
+        if (cached != null) return cached;
+
+        try {
+            List<Map<String, Object>> events = githubRequest(
+                    "/users/{username}/events?per_page={per_page}", username, perPage)
+                    .retrieve()
+                    .bodyToMono(List.class)
+                    .block(Duration.ofSeconds(10));
+            putToCache(cacheKey, events);
+            return events;
+        } catch (WebClientResponseException.NotFound e) {
+            throw new IllegalArgumentException("GitHub 用户 \"" + username + "\" 不存在");
+        } catch (WebClientResponseException.Forbidden e) {
+            log.warn("GitHub API rate limited for user events: {}", username);
+            throw new RuntimeException("GitHub API 请求次数已达上限，请稍后重试");
+        } catch (Exception e) {
+            log.error("GitHub API error for events {}: {}", username, e.getMessage());
+            throw new RuntimeException("获取用户动态失败：" + e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getUserOrgs(String username) {
+        String cacheKey = CACHE_PREFIX + "orgs:" + username;
+        List<Map<String, Object>> cached = getFromCacheList(cacheKey);
+        if (cached != null) return cached;
+
+        try {
+            List<Map<String, Object>> orgs = githubRequest("/users/{username}/orgs", username)
+                    .retrieve()
+                    .bodyToMono(List.class)
+                    .block(Duration.ofSeconds(10));
+            putToCache(cacheKey, orgs);
+            return orgs;
+        } catch (WebClientResponseException.NotFound e) {
+            // Not an error — many users aren't in any org
+            List<Map<String, Object>> empty = List.of();
+            putToCache(cacheKey, empty);
+            return empty;
+        } catch (WebClientResponseException.Forbidden e) {
+            log.warn("GitHub API rate limited for user orgs: {}", username);
+            throw new RuntimeException("GitHub API 请求次数已达上限，请稍后重试");
+        } catch (Exception e) {
+            log.error("GitHub API error for orgs {}: {}", username, e.getMessage());
+            throw new RuntimeException("获取组织信息失败：" + e.getMessage());
+        }
+    }
+
+    /** Aggregated stats across all user repos (cached separately, shorter TTL) */
+    public Map<String, Object> getUserRepoStats(String username) {
+        String cacheKey = CACHE_PREFIX + "stats:" + username;
+        Map<String, Object> cached = getFromCache(cacheKey, Map.class);
+        if (cached != null) return cached;
+
+        // Fetch all repos (up to 100) to compute aggregate stats
+        List<Map<String, Object>> repos = getUserRepos(username, "pushed", 100);
+
+        int totalStars = 0, totalForks = 0, totalIssues = 0;
+        long totalSize = 0;
+        Map<String, Integer> langCounts = new java.util.LinkedHashMap<>();
+        Map<String, Long> langBytes = new java.util.LinkedHashMap<>();
+        String oldestRepo = null;
+        String earliestDate = null;
+        String biggestRepo = null;
+        long biggestSize = 0;
+        int originalCount = 0;
+        int hasLicense = 0;
+        int hasHomepage = 0;
+        int hasTopics = 0;
+
+        for (Map<String, Object> r : repos) {
+            totalStars += ((Number) r.getOrDefault("stargazers_count", 0)).intValue();
+            totalForks += ((Number) r.getOrDefault("forks_count", 0)).intValue();
+            totalIssues += ((Number) r.getOrDefault("open_issues_count", 0)).intValue();
+            int size = ((Number) r.getOrDefault("size", 0)).intValue();
+            totalSize += size;
+
+            String lang = (String) r.get("language");
+            if (lang != null) {
+                langCounts.merge(lang, 1, Integer::sum);
+                langBytes.merge(lang, (long) size, Long::sum);
+            }
+
+            String created = (String) r.get("created_at");
+            if (created != null && (earliestDate == null || created.compareTo(earliestDate) < 0)) {
+                earliestDate = created;
+                oldestRepo = (String) r.get("full_name");
+            }
+
+            if (size > biggestSize) {
+                biggestSize = size;
+                biggestRepo = (String) r.get("full_name");
+            }
+
+            if (Boolean.TRUE.equals(r.get("fork"))) { } else { originalCount++; }
+            if (r.get("license") != null) hasLicense++;
+            if (r.get("homepage") != null && !((String) r.get("homepage")).isBlank()) hasHomepage++;
+            if (r.get("topics") instanceof List && !((List<?>) r.get("topics")).isEmpty()) hasTopics++;
+        }
+
+        Map<String, Object> stats = new java.util.LinkedHashMap<>();
+        stats.put("totalStars", totalStars);
+        stats.put("totalForks", totalForks);
+        stats.put("totalIssues", totalIssues);
+        stats.put("totalSize", totalSize);
+        stats.put("totalRepos", repos.size());
+        stats.put("originalRepos", originalCount);
+        stats.put("forkedRepos", repos.size() - originalCount);
+        stats.put("hasLicense", hasLicense);
+        stats.put("hasHomepage", hasHomepage);
+        stats.put("hasTopics", hasTopics);
+        stats.put("oldestRepo", oldestRepo);
+        stats.put("earliestDate", earliestDate);
+        stats.put("biggestRepo", biggestRepo);
+        stats.put("biggestSize", biggestSize);
+        stats.put("langCounts", langCounts);
+        stats.put("langBytes", langBytes);
+
+        // Calculate top languages by bytes
+        List<Map<String, Object>> topLanguages = langBytes.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(10)
+                .map(e -> Map.<String, Object>of("name", e.getKey(), "bytes", e.getValue(),
+                        "repos", langCounts.getOrDefault(e.getKey(), 0)))
+                .toList();
+        stats.put("topLanguages", topLanguages);
+
+        putToCache(cacheKey, stats);
+        return stats;
+    }
+
     public void refreshCache(String username) {
         String pattern = CACHE_PREFIX + "*:" + username + "*";
         redisTemplate.delete(redisTemplate.keys(pattern));
