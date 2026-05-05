@@ -25,16 +25,6 @@
           <div class="form-hint">AI 分析和对话的默认输出语言</div>
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-item">
-          <label class="form-label">GitHub Token</label>
-          <el-input v-model="form.github_token" type="password" show-password size="large" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" />
-          <div class="form-hint">
-            配置 GitHub Personal Access Token 可提升 API 请求限额至 5000 次/小时（不配仅 60 次/小时）。
-            <a href="https://github.com/settings/tokens" target="_blank" style="color: #2da44e">创建 Token</a>，无需任何权限即可使用。
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
